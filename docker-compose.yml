@@ -1,0 +1,17 @@
+services:
+  media_bot:
+    # Build the Docker image using the Dockerfile in the current directory
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # Set the timezone environment variable inside the container
+    environment:
+      - TZ=Asia/Dhaka
+
+    # Always restart the container if it stops or crashes
+    restart: always
+
+    # Mount the current directory on the host to /app inside the container
+    volumes:
+      - .:/app
