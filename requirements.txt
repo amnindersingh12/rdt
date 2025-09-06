@@ -1,4 +1,5 @@
 Pyrofork
+gunicorn
 TgCrypto
 Pyleaves
 python-dotenv
