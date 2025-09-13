@@ -3,6 +3,10 @@ import shutil
 import psutil
 import asyncio
 from time import time
+import asyncio
+import os
+import shutil
+import psutil
 
 from pyleaves import Leaves
 from pyrogram.enums import ParseMode
@@ -13,6 +17,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from helpers.utils import processMediaGroup, progressArgs, send_media
 from helpers.files import get_download_path, fileSizeLimit, get_readable_file_size, get_readable_time, cleanup_download
 from helpers.msg import getChatMsgID, get_file_name, get_parsed_msg
+from helpers.channel import ChannelCloner
 
 from config import PyroConf
 from logger import LOGGER
@@ -32,6 +37,9 @@ user = Client(
     workers=1000,
     session_string=PyroConf.SESSION_STRING,
 )
+
+# Initialize channel cloner
+channel_cloner = ChannelCloner(user, bot, delay=1.0)
 
 RUNNING_TASKS = set()
 
@@ -54,7 +62,17 @@ async def handle_download(bot: Client, message: Message, post_url: str):
 
     try:
         chat_id, message_id = getChatMsgID(post_url)
-        chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
+        result = await user.get_messages(chat_id=chat_id, message_ids=message_id)
+        
+        # Extract single message from result
+        if isinstance(result, list):
+            chat_message = result[0] if result else None
+        else:
+            chat_message = result
+        
+        if not chat_message:
+            await message.reply("**❌ Message not found or unable to access.**")
+            return
 
         LOGGER(__name__).info(f"Downloading media from URL: {post_url}")
 
@@ -65,7 +83,7 @@ async def handle_download(bot: Client, message: Message, post_url: str):
                 else chat_message.video.file_size if chat_message.video
                 else chat_message.audio.file_size
             )
-            if not await fileSizeLimit(file_size, message, "download", user.me.is_premium):
+            if not await fileSizeLimit(file_size, message, "download", getattr(user.me, 'is_premium', False)):
                 return
 
         parsed_caption = await get_parsed_msg(chat_message.caption or "", chat_message.caption_entities)
@@ -111,6 +129,20 @@ async def handle_download(bot: Client, message: Message, post_url: str):
 
     except (PeerIdInvalid, BadRequest, KeyError):
         await message.reply("**Make sure the user client is part of the chat.**")
+    except ValueError as e:
+        if "Invalid URL format" in str(e):
+            await message.reply(
+                "**❌ Invalid Telegram URL**\n\n"
+                "Please send a valid Telegram post URL like:\n"
+                "• `https://t.me/channel/123`\n"
+                "• `https://t.me/c/1234567890/123`\n\n"
+                "For channel cloning, use:\n"
+                "• `/clone_channel <source> <target>`\n"
+                "• `/clone_range <source> <target> <start> <end>`"
+            )
+        else:
+            await message.reply(f"**❌ Please send a valid Telegram post URL.**")
+        LOGGER(__name__).error(f"URL validation error: {e}")
     except Exception as e:
         await message.reply(f"**❌ {e}**")
         LOGGER(__name__).error(e)
@@ -164,7 +196,14 @@ async def download_range(bot: Client, message: Message):
     for msg_id in range(start_id, end_id + 1):
         url = f"{prefix}/{msg_id}"
         try:
-            chat_msg = await user.get_messages(chat_id=start_chat, message_ids=msg_id)
+            result = await user.get_messages(chat_id=start_chat, message_ids=msg_id)
+            
+            # Extract single message from result
+            if isinstance(result, list):
+                chat_msg = result[0] if result else None
+            else:
+                chat_msg = result
+                
             if not chat_msg:
                 skipped += 1
                 continue
@@ -199,11 +238,54 @@ async def download_range(bot: Client, message: Message):
         f"❌ **Failed**    : `{failed}` error(s)"
     )
 
-@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall", "forward"]))
+@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall", "forward", "clone_channel", "clone_range"]))
 async def handle_any_message(bot: Client, message: Message):
     # Auto-download if user sends plain text link without commands
     if message.text and not message.text.startswith("/"):
-        await track_task(handle_download(bot, message, message.text))
+        text = message.text.strip()
+        
+        # Check if it's a Telegram link
+        if "https://t.me/" in text:
+            # Extract the part after t.me/
+            try:
+                after_tme = text.split("https://t.me/")[-1].strip()
+                
+                # Check if it's a channel-only link (no message ID)
+                if "/" not in after_tme or not after_tme.split("/")[-1].isdigit():
+                    await message.reply(
+                        "**📎 Channel Link Detected**\n\n"
+                        "This looks like a channel link. Use these commands:\n\n"
+                        "• `/clone_channel <source> <target>` - Clone entire channel\n"
+                        "• `/clone_range <source> <target> <start> <end>` - Clone message range\n\n"
+                        "**Target can be any channel/group:**\n"
+                        "• Public: `@mychannel` or `@mygroup`\n"
+                        "• Private: `https://t.me/+ABC123...`\n"
+                        "• Chat ID: `-1001234567890`\n\n"
+                        "**Examples:**\n"
+                        f"• `/clone_channel {text} @yourtarget`\n"
+                        f"• `/clone_range {text} @yourtarget 1 100`"
+                    )
+                    return
+                    
+                # It has a message ID, try to download
+                await track_task(handle_download(bot, message, text))
+                
+            except Exception:
+                await message.reply(
+                    "**❌ Invalid Link Format**\n\n"
+                    "Please send a valid Telegram post URL with message ID:\n"
+                    "• `https://t.me/channel/123`\n"
+                    "• `https://t.me/c/1234567890/123`"
+                )
+        else:
+            # Not a Telegram link
+            await message.reply(
+                "**📎 Send a Telegram Link**\n\n"
+                "Please send a Telegram post URL or use these commands:\n\n"
+                "• `/dl <post_url>` - Download specific post\n"
+                "• `/clone_channel <source> <target>` - Clone entire channel\n"
+                "• `/clone_range <source> <target> <start> <end>` - Clone message range"
+            )
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
@@ -357,6 +439,228 @@ async def manage_forwarding(_, message: Message):
     
     else:
         await message.reply("**Invalid command. Use `/forward help` for available options.**")
+
+@bot.on_message(filters.command("clone_channel") & filters.private)
+async def clone_full_channel(bot: Client, message: Message):
+    """Clone an entire channel from source to target."""
+    args = message.text.split()
+    
+    if len(args) != 3:
+        await message.reply(
+            "🔄 **Channel Cloning** (Media Only)\n\n"
+            "**Usage:** `/clone_channel <source> <target>`\n\n"
+            "**Examples:**\n"
+            "• `/clone_channel @sourcechannel @targetchannel`\n"
+            "• `/clone_channel sourcechannel targetchannel`\n"
+            "• `/clone_channel https://t.me/sourcechannel https://t.me/targetchannel`\n\n"
+            "**Target can be:**\n"
+            "• Public channel: `@mychannel`\n"
+            "• Private channel: `https://t.me/+ABC123...`\n"
+            "• Public group: `@mygroup`\n"
+            "• Private group: `https://t.me/+XYZ789...`\n"
+            "• Chat ID: `-1001234567890`\n\n"
+            "**Note:** Only forwards photos, videos, documents, and stickers.\n"
+            "Text messages, captions, and audio files are skipped.\n"
+            "You must have posting rights in the target."
+        )
+        return
+    
+    source_channel = args[1]
+    target_channel = args[2]
+    
+    # Normalize channel identifiers - handle t.me links, @ prefixes, or plain usernames
+    def normalize_channel(channel_str):
+        channel = channel_str.strip()
+        if channel.startswith("https://t.me/"):
+            channel = channel.rstrip("/").rsplit("/", 1)[-1]
+        elif channel.startswith('@'):
+            channel = channel[1:]
+        return channel
+    
+    source_channel = normalize_channel(source_channel)
+    target_channel = normalize_channel(target_channel)
+    
+    status_msg = await message.reply("🔍 **Validating channels and permissions...**")
+    
+    try:
+        # Validate channels
+        source_info = await channel_cloner.get_channel_info(source_channel)
+        if not source_info:
+            await status_msg.edit("❌ **Cannot access source channel. Make sure you're a member.**")
+            return
+        
+        target_info = await channel_cloner.get_channel_info(target_channel)
+        if not target_info:
+            await status_msg.edit("❌ **Cannot access target. Make sure you have posting rights in the target channel/group.**")
+            return
+        
+        await status_msg.edit(
+            f"✅ **Validated Successfully!**\n\n"
+            f"**Source:** {source_info['title']} ({source_info.get('type_description', 'Channel')})\n"
+            f"**Target:** {target_info['title']} ({target_info.get('type_description', 'Channel')})\n\n"
+            f"🚀 **Starting full channel clone...**\n"
+            f"This may take a while depending on channel size."
+        )
+        
+        # Progress callback function
+        async def progress_callback(current_id, start_id, end_id, stats):
+            if current_id % 50 == 0:  # Update every 50 messages
+                progress_text = (
+                    f"📊 **Cloning Progress** (Media Only)\n\n"
+                    f"**Current Message:** {current_id}\n"
+                    f"**Range:** {start_id} - {end_id}\n\n"
+                    f"✅ **Media Forwarded:** {stats['successful']}\n"
+                    f"❌ **Failed:** {stats['failed']}\n"
+                    f"⏭️ **Skipped (Text/Audio):** {stats['skipped']}\n"
+                    f"📈 **Total Processed:** {stats['total']}\n\n"
+                    f"*Note: Text, captions, and audio are filtered out*"
+                )
+                try:
+                    await status_msg.edit(progress_text)
+                except:
+                    pass  # Ignore edit errors (rate limits, etc.)
+        
+        # Start cloning
+        stats = await channel_cloner.clone_channel_messages(
+            source_channel, 
+            target_channel,
+            progress_callback=progress_callback
+        )
+        
+        # Final report
+        final_text = (
+            f"🎉 **Channel Cloning Complete!** (Media Only)\n\n"
+            f"**Source:** {source_info['title']} ({source_info.get('type_description', 'Channel')})\n"
+            f"**Target:** {target_info['title']} ({target_info.get('type_description', 'Channel')})\n\n"
+            f"📊 **Final Statistics:**\n"
+            f"✅ **Media Forwarded:** {stats['successful']}\n"
+            f"❌ **Failed:** {stats['failed']}\n"
+            f"⏭️ **Skipped (Text/Audio):** {stats['skipped']}\n"
+            f"📈 **Total Processed:** {stats['total']}\n\n"
+            f"*Note: Text, captions, and audio files were filtered out*"
+        )
+        await status_msg.edit(final_text)
+        
+    except Exception as e:
+        await status_msg.edit(f"❌ **Error during cloning:**\n`{str(e)}`")
+        LOGGER(__name__).error(f"Channel cloning error: {e}")
+
+@bot.on_message(filters.command("clone_range") & filters.private)
+async def clone_range_messages(bot: Client, message: Message):
+    """Clone a specific range of messages from one channel to another."""
+    args = message.text.split()
+    
+    if len(args) != 5:
+        await message.reply(
+            "🔄 **Range Cloning** (Media Only)\n\n"
+            "**Usage:** `/clone_range <source> <target> <start_id> <end_id>`\n\n"
+            "**Examples:**\n"
+            "• `/clone_range @source @target 100 200`\n"
+            "• `/clone_range cctv5a majhewalee 8400 8500`\n"
+            "• `/clone_range https://t.me/+ABC123... @mygroup 1 50`\n\n"
+            "**Target can be any channel/group you have access to:**\n"
+            "• Public/private channels • Public/private groups • Chat IDs\n\n"
+            "**Note:** Range is inclusive. Only forwards photos, videos,\n"
+            "documents, and stickers. Text and audio are skipped."
+        )
+        return
+    
+    source_channel = args[1]
+    target_channel = args[2]
+    
+    try:
+        start_id = int(args[3])
+        end_id = int(args[4])
+    except ValueError:
+        await message.reply("❌ **Start and end IDs must be valid numbers.**")
+        return
+    
+    if start_id > end_id:
+        await message.reply("❌ **Start ID cannot be greater than end ID.**")
+        return
+    
+    # Normalize channel identifiers
+    def normalize_channel(channel_str):
+        channel = channel_str.strip()
+        if channel.startswith("https://t.me/"):
+            channel = channel.rstrip("/").rsplit("/", 1)[-1]
+        elif channel.startswith('@'):
+            channel = channel[1:]
+        return channel
+    
+    source_channel = normalize_channel(source_channel)
+    target_channel = normalize_channel(target_channel)
+    
+    status_msg = await message.reply(
+        f"🔍 **Validating channels for range clone...**\n"
+        f"**Range:** {start_id} - {end_id} ({end_id - start_id + 1} messages)"
+    )
+    
+    try:
+        # Validate channels
+        source_info = await channel_cloner.get_channel_info(source_channel)
+        if not source_info:
+            await status_msg.edit("❌ **Cannot access source channel. Make sure you're a member.**")
+            return
+        
+        target_info = await channel_cloner.get_channel_info(target_channel)
+        if not target_info:
+            await status_msg.edit("❌ **Cannot access target. Make sure you have posting rights in the target channel/group.**")
+            return
+        
+        await status_msg.edit(
+            f"✅ **Starting range clone...**\n\n"
+            f"**Source:** {source_info['title']} ({source_info.get('type_description', 'Channel')})\n"
+            f"**Target:** {target_info['title']} ({target_info.get('type_description', 'Channel')})\n"
+            f"**Range:** {start_id} - {end_id}\n"
+            f"**Total Messages:** {end_id - start_id + 1}"
+        )
+        
+        # Progress callback function
+        async def progress_callback(current_id, start_id, end_id, stats):
+            if current_id % 25 == 0:  # Update every 25 messages for range clone
+                progress = ((current_id - start_id + 1) / (end_id - start_id + 1)) * 100
+                progress_text = (
+                    f"📊 **Range Clone Progress** (Media Only)\n\n"
+                    f"**Progress:** {progress:.1f}%\n"
+                    f"**Current:** {current_id}/{end_id}\n\n"
+                    f"✅ **Media Forwarded:** {stats['successful']}\n"
+                    f"❌ **Failed:** {stats['failed']}\n"
+                    f"⏭️ **Skipped (Text/Audio):** {stats['skipped']}\n\n"
+                    f"*Filtering out text, captions, and audio*"
+                )
+                try:
+                    await status_msg.edit(progress_text)
+                except:
+                    pass
+        
+        # Start range cloning
+        stats = await channel_cloner.clone_channel_messages(
+            source_channel, 
+            target_channel,
+            start_id=start_id,
+            end_id=end_id,
+            progress_callback=progress_callback
+        )
+        
+        # Final report
+        final_text = (
+            f"🎉 **Range Clone Complete!** (Media Only)\n\n"
+            f"**Source:** {source_info['title']} ({source_info.get('type_description', 'Channel')})\n"
+            f"**Target:** {target_info['title']} ({target_info.get('type_description', 'Channel')})\n"
+            f"**Range:** {start_id} - {end_id}\n\n"
+            f"📊 **Statistics:**\n"
+            f"✅ **Media Forwarded:** {stats['successful']}\n"
+            f"❌ **Failed:** {stats['failed']}\n"
+            f"⏭️ **Skipped (Text/Audio):** {stats['skipped']}\n"
+            f"📈 **Total Processed:** {stats['total']}\n\n"
+            f"*Note: Text, captions, and audio files were filtered out*"
+        )
+        await status_msg.edit(final_text)
+        
+    except Exception as e:
+        await status_msg.edit(f"❌ **Error during range cloning:**\n`{str(e)}`")
+        LOGGER(__name__).error(f"Range cloning error: {e}")
 
 if __name__ == "__main__":
     try:
