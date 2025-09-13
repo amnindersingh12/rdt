@@ -19,11 +19,13 @@ from pyrogram.types import (
 
 from helpers.files import (
     fileSizeLimit,
-    cleanup_download
+    cleanup_download,
+    get_download_path
 )
 
 from helpers.msg import (
-    get_parsed_msg
+    get_parsed_msg,
+    get_file_name
 )
 
 # Template for progress bar display during upload/download operations
@@ -269,8 +271,13 @@ async def processMediaGroup(chat_message, bot, message):
         # Acceptable media types to process
         if msg.photo or msg.video or msg.document or msg.audio:
             try:
-                # Download media with progress callback
+                # Generate a proper filename and download path for each media item
+                filename = get_file_name(msg.id, msg)
+                download_path = get_download_path(message.id, filename)
+                
+                # Download media with progress callback using proper file path
                 media_path = await msg.download(
+                    file_name=download_path,
                     progress=Leaves.progress_for_pyrogram,
                     progress_args=progressArgs(
                         "📥 Downloading Progress", progress_message, start_time
@@ -295,9 +302,9 @@ async def processMediaGroup(chat_message, bot, message):
 
             except Exception as e:
                 LOGGER(__name__).info(f"Error downloading media: {e}")
-
+                
                 # If we have a media path and the file exists, mark it as invalid for cleanup
-                if media_path and os.path.exists(media_path):
+                if 'media_path' in locals() and media_path and os.path.exists(media_path):
                     invalid_paths.append(media_path)
                 continue
 
