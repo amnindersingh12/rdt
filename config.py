@@ -36,5 +36,10 @@ class PyroConf(object):
     # Session string for user authentication (string session), also validated above
     SESSION_STRING = session_string
 
+    # Channel forwarding configuration
+    SOURCE_CHANNELS = getenv("SOURCE_CHANNELS", "")  # Comma-separated list of channel usernames or IDs
+    DESTINATION_CHANNEL = getenv("DESTINATION_CHANNEL", "")  # Target channel to forward to
+    FORWARD_ENABLED = getenv("FORWARD_ENABLED", "false").lower() == "true"  # Enable/disable forwarding
+    
     # Timestamp marking when the bot started (epoch time)
     BOT_START_TIME = time()

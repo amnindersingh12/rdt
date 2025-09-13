@@ -1,0 +1,8 @@
+[13-Sep-25 07:44:27 PM - INFO] - <module>() - Line 654: __main__ - Bot Started!
+[13-Sep-25 07:45:41 PM - ERROR] - get_channel_info() - Line 54: helpers.channel - Cannot access channel '+bU0NWoy58O0xZjQ1': Telegram says: [400 USERNAME_NOT_OCCUPIED] (caused by "contacts.ResolveUsername") Pyrogram 2.3.68 thinks: The username is not occupied by anyone
+[13-Sep-25 07:46:11 PM - ERROR] - get_channel_info() - Line 54: helpers.channel - Cannot access channel '+bU0NWoy58O0xZjQ1': Telegram says: [400 USERNAME_NOT_OCCUPIED] (caused by "contacts.ResolveUsername") Pyrogram 2.3.68 thinks: The username is not occupied by anyone
+[13-Sep-25 07:47:06 PM - INFO] - clone_channel_messages() - Line 89: helpers.channel - Starting full channel clone from idontknowthenameofthischanne to bU0NWoy58O0xZjQ1
+[13-Sep-25 07:47:37 PM - INFO] - _copy_single_message() - Line 166: helpers.channel - Skipping text-only message idontknowthenameofthischanne/129
+[13-Sep-25 07:50:52 PM - INFO] - _copy_single_message() - Line 181: helpers.channel - Skipping message idontknowthenameofthischanne/1 - no media content
+[13-Sep-25 07:52:56 PM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
+[13-Sep-25 07:52:56 PM - INFO] - <module>() - Line 662: __main__ - Bot Stopped
