@@ -13,6 +13,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from helpers.utils import processMediaGroup, progressArgs, send_media
 from helpers.files import get_download_path, fileSizeLimit, get_readable_file_size, get_readable_time, cleanup_download
 from helpers.msg import getChatMsgID, get_file_name, get_parsed_msg
+from helpers.channel import ChannelCloner
 
 from config import PyroConf
 from logger import LOGGER
@@ -35,6 +36,9 @@ user = Client(
 
 RUNNING_TASKS = set()
 
+# Initialize channel cloner
+channel_cloner = ChannelCloner(user, bot)
+
 def track_task(coro):
     """Create and track an asyncio task."""
     task = asyncio.create_task(coro)
@@ -46,8 +50,210 @@ def track_task(coro):
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
-    welcome_text = "👋 **How You**\n\nReady? Send me a Telegram post link!"
+    welcome_text = (
+        "👋 **Welcome!**\n\n"
+        "🚀 **Available Commands:**\n"
+        "• Send a Telegram post link for single download\n"
+        "• `/dl <post_url>` - Download media from post\n"
+        "• `/bdl <start_url> <end_url>` - Batch download posts\n"
+        "• `/clone_channel <source> <target>` - Clone entire channel\n"
+        "• `/clone_range <source> <target> <start_id> <end_id>` - Clone message range\n"
+        "• `/stats` - Bot statistics\n"
+        "• `/logs` - View logs\n"
+        "• `/killall` - Cancel all running tasks\n\n"
+        "**Ready?** Send me a command or Telegram post link!"
+    )
     await message.reply(welcome_text, disable_web_page_preview=True)
+
+@bot.on_message(filters.command("clone_channel") & filters.private)
+async def clone_full_channel(bot: Client, message: Message):
+    """Clone an entire channel from source to target."""
+    args = message.text.split()
+    
+    if len(args) != 3:
+        await message.reply(
+            "🔄 **Channel Cloning**\n\n"
+            "**Usage:** `/clone_channel <source_channel> <target_channel>`\n\n"
+            "**Examples:**\n"
+            "• `/clone_channel @sourcechannel @targetchannel`\n"
+            "• `/clone_channel sourcechannel targetchannel`\n\n"
+            "**Note:** You must be admin in target channel with post message rights."
+        )
+        return
+    
+    source_channel = args[1]
+    target_channel = args[2]
+    
+    # Remove @ if present
+    if source_channel.startswith('@'):
+        source_channel = source_channel[1:]
+    if target_channel.startswith('@'):
+        target_channel = target_channel[1:]
+    
+    status_msg = await message.reply("🔍 **Validating channels and permissions...**")
+    
+    try:
+        # Validate channels
+        source_info = await channel_cloner.get_channel_info(source_channel)
+        if not source_info:
+            await status_msg.edit("❌ **Cannot access source channel. Make sure you're a member.**")
+            return
+        
+        target_info = await channel_cloner.get_channel_info(target_channel)
+        if not target_info:
+            await status_msg.edit("❌ **Cannot access target channel. Make sure you're a member with admin rights.**")
+            return
+        
+        await status_msg.edit(
+            f"✅ **Channels validated!**\n\n"
+            f"**Source:** {source_info['title']}\n"
+            f"**Target:** {target_info['title']}\n\n"
+            f"🚀 **Starting full channel clone...**\n"
+            f"This may take a while depending on channel size."
+        )
+        
+        # Progress callback function
+        async def progress_callback(current_id, start_id, end_id, stats):
+            if current_id % 50 == 0:  # Update every 50 messages
+                progress_text = (
+                    f"📊 **Cloning Progress**\n\n"
+                    f"**Current Message:** {current_id}\n"
+                    f"**Range:** {start_id} - {end_id}\n\n"
+                    f"✅ **Successful:** {stats['successful']}\n"
+                    f"❌ **Failed:** {stats['failed']}\n"
+                    f"⏭️ **Skipped:** {stats['skipped']}\n"
+                    f"📈 **Total Processed:** {stats['total']}"
+                )
+                try:
+                    await status_msg.edit(progress_text)
+                except:
+                    pass  # Ignore edit errors (rate limits, etc.)
+        
+        # Start cloning
+        stats = await channel_cloner.clone_channel_messages(
+            source_channel, 
+            target_channel,
+            progress_callback=progress_callback
+        )
+        
+        # Final report
+        final_text = (
+            f"🎉 **Channel Cloning Complete!**\n\n"
+            f"**Source:** {source_info['title']}\n"
+            f"**Target:** {target_info['title']}\n\n"
+            f"📊 **Final Statistics:**\n"
+            f"✅ **Successful:** {stats['successful']}\n"
+            f"❌ **Failed:** {stats['failed']}\n"
+            f"⏭️ **Skipped:** {stats['skipped']}\n"
+            f"📈 **Total Processed:** {stats['total']}"
+        )
+        await status_msg.edit(final_text)
+        
+    except Exception as e:
+        await status_msg.edit(f"❌ **Error during cloning:**\n`{str(e)}`")
+        LOGGER(__name__).error(f"Channel cloning error: {e}")
+
+@bot.on_message(filters.command("clone_range") & filters.private)
+async def clone_channel_range(bot: Client, message: Message):
+    """Clone a specific range of messages from source to target channel."""
+    args = message.text.split()
+    
+    if len(args) != 5:
+        await message.reply(
+            "🔄 **Range Cloning**\n\n"
+            "**Usage:** `/clone_range <source_channel> <target_channel> <start_id> <end_id>`\n\n"
+            "**Examples:**\n"
+            "• `/clone_range @sourcechannel @targetchannel 100 200`\n"
+            "• `/clone_range sourcechannel targetchannel 1 50`\n\n"
+            "**Note:** You must be admin in target channel with post message rights."
+        )
+        return
+    
+    source_channel = args[1]
+    target_channel = args[2]
+    
+    try:
+        start_id = int(args[3])
+        end_id = int(args[4])
+    except ValueError:
+        await message.reply("❌ **Start and end IDs must be valid numbers.**")
+        return
+    
+    if start_id > end_id:
+        await message.reply("❌ **Start ID cannot be greater than end ID.**")
+        return
+    
+    # Remove @ if present
+    if source_channel.startswith('@'):
+        source_channel = source_channel[1:]
+    if target_channel.startswith('@'):
+        target_channel = target_channel[1:]
+    
+    status_msg = await message.reply("🔍 **Validating channels and permissions...**")
+    
+    try:
+        # Validate channels
+        source_info = await channel_cloner.get_channel_info(source_channel)
+        if not source_info:
+            await status_msg.edit("❌ **Cannot access source channel. Make sure you're a member.**")
+            return
+        
+        target_info = await channel_cloner.get_channel_info(target_channel)
+        if not target_info:
+            await status_msg.edit("❌ **Cannot access target channel. Make sure you're a member with admin rights.**")
+            return
+        
+        await status_msg.edit(
+            f"✅ **Channels validated!**\n\n"
+            f"**Source:** {source_info['title']}\n"
+            f"**Target:** {target_info['title']}\n"
+            f"**Range:** {start_id} - {end_id}\n\n"
+            f"🚀 **Starting range clone...**"
+        )
+        
+        # Progress callback function
+        async def progress_callback(current_id, start_id, end_id, stats):
+            if current_id % 10 == 0:  # Update every 10 messages for smaller ranges
+                progress_text = (
+                    f"📊 **Cloning Progress**\n\n"
+                    f"**Current Message:** {current_id}\n"
+                    f"**Range:** {start_id} - {end_id}\n\n"
+                    f"✅ **Successful:** {stats['successful']}\n"
+                    f"❌ **Failed:** {stats['failed']}\n"
+                    f"⏭️ **Skipped:** {stats['skipped']}\n"
+                    f"📈 **Total Processed:** {stats['total']}"
+                )
+                try:
+                    await status_msg.edit(progress_text)
+                except:
+                    pass  # Ignore edit errors
+        
+        # Start range cloning
+        stats = await channel_cloner.clone_channel_messages(
+            source_channel, 
+            target_channel,
+            start_id=start_id,
+            end_id=end_id,
+            progress_callback=progress_callback
+        )
+        
+        # Final report
+        final_text = (
+            f"🎉 **Range Cloning Complete!**\n\n"
+            f"**Source:** {source_info['title']}\n"
+            f"**Target:** {target_info['title']}\n"
+            f"**Range:** {start_id} - {end_id}\n\n"
+            f"📊 **Final Statistics:**\n"
+            f"✅ **Successful:** {stats['successful']}\n"
+            f"❌ **Failed:** {stats['failed']}\n"
+            f"⏭️ **Skipped:** {stats['skipped']}\n"
+            f"📈 **Total Processed:** {stats['total']}"
+        )
+        await status_msg.edit(final_text)
+        
+    except Exception as e:
+        await status_msg.edit(f"❌ **Error during range cloning:**\n`{str(e)}`")
+        LOGGER(__name__).error(f"Range cloning error: {e}")
 
 async def handle_download(bot: Client, message: Message, post_url: str):
     post_url = post_url.split("?", 1)[0]  # Remove URL query parameters
@@ -199,7 +405,7 @@ async def download_range(bot: Client, message: Message):
         f"❌ **Failed**    : `{failed}` error(s)"
     )
 
-@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall"]))
+@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall", "clone_channel", "clone_range"]))
 async def handle_any_message(bot: Client, message: Message):
     # Auto-download if user sends plain text link without commands
     if message.text and not message.text.startswith("/"):

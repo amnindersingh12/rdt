@@ -6,3 +6,11 @@
 *.json
 *.html
 ./*.pyc
+config.env
+logs.txt
+downloads/
+test_basic.py
+Assets/video_thumb.jpg
+*.swp
+*.swo
+*~
