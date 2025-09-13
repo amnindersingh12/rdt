@@ -199,7 +199,7 @@ async def download_range(bot: Client, message: Message):
         f"❌ **Failed**    : `{failed}` error(s)"
     )
 
-@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall"]))
+@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall", "forward"]))
 async def handle_any_message(bot: Client, message: Message):
     # Auto-download if user sends plain text link without commands
     if message.text and not message.text.startswith("/"):
@@ -246,6 +246,117 @@ async def cancel_all_tasks(_, message: Message):
             task.cancel()
             cancelled += 1
     await message.reply(f"**Cancelled {cancelled} running task(s).**")
+
+# Channel forwarding functionality
+def get_source_channel_ids():
+    """Parse SOURCE_CHANNELS config to get list of channel IDs/usernames"""
+    if not PyroConf.SOURCE_CHANNELS:
+        return []
+    return [ch.strip() for ch in PyroConf.SOURCE_CHANNELS.split(",") if ch.strip()]
+
+async def forward_message_to_destination(message: Message):
+    """Forward a message to the destination channel"""
+    if not PyroConf.DESTINATION_CHANNEL:
+        LOGGER(__name__).warning("No destination channel configured")
+        return
+        
+    try:
+        # Forward the message to the destination channel
+        await user.forward_messages(
+            chat_id=PyroConf.DESTINATION_CHANNEL,
+            from_chat_id=message.chat.id,
+            message_ids=message.id
+        )
+        LOGGER(__name__).info(f"Forwarded message {message.id} from {message.chat.id} to {PyroConf.DESTINATION_CHANNEL}")
+    except Exception as e:
+        LOGGER(__name__).error(f"Failed to forward message: {e}")
+
+@user.on_message(filters.channel)
+async def handle_channel_message(client: Client, message: Message):
+    """Handle new messages from monitored channels"""
+    if not PyroConf.FORWARD_ENABLED:
+        return
+    
+    # Skip edited messages
+    if message.edit_date:
+        return
+        
+    source_channels = get_source_channel_ids()
+    if not source_channels:
+        return
+    
+    # Check if message is from one of our monitored channels
+    channel_match = False
+    for source_channel in source_channels:
+        try:
+            # Handle both username and ID formats
+            if source_channel.startswith("@"):
+                source_channel = source_channel[1:]  # Remove @ prefix
+            
+            # Check if the message is from this source channel
+            if (str(message.chat.id) == str(source_channel) or 
+                str(message.chat.username) == str(source_channel) or
+                message.chat.username == source_channel):
+                channel_match = True
+                break
+        except Exception as e:
+            LOGGER(__name__).error(f"Error checking channel {source_channel}: {e}")
+            continue
+    
+    if channel_match:
+        await forward_message_to_destination(message)
+
+@bot.on_message(filters.command("forward") & filters.private)
+async def manage_forwarding(_, message: Message):
+    """Command to manage channel forwarding settings"""
+    args = message.text.split()
+    
+    if len(args) == 1:
+        # Show current settings
+        source_channels = get_source_channel_ids()
+        status = "✅ Enabled" if PyroConf.FORWARD_ENABLED else "❌ Disabled"
+        
+        settings_text = (
+            f"**📡 Channel Forwarding Settings**\n\n"
+            f"**Status:** {status}\n"
+            f"**Source Channels:** `{', '.join(source_channels) if source_channels else 'None configured'}`\n"
+            f"**Destination Channel:** `{PyroConf.DESTINATION_CHANNEL if PyroConf.DESTINATION_CHANNEL else 'None configured'}`\n\n"
+            f"**Commands:**\n"
+            f"`/forward status` - Show current settings\n"
+            f"`/forward help` - Show help information"
+        )
+        await message.reply(settings_text)
+        return
+    
+    if args[1] == "status":
+        source_channels = get_source_channel_ids()
+        status = "✅ Enabled" if PyroConf.FORWARD_ENABLED else "❌ Disabled"
+        
+        settings_text = (
+            f"**📡 Forwarding Status**\n\n"
+            f"**Status:** {status}\n"
+            f"**Source Channels:** `{len(source_channels)} configured`\n"
+            f"**Destination:** `{PyroConf.DESTINATION_CHANNEL if PyroConf.DESTINATION_CHANNEL else 'Not configured'}`"
+        )
+        await message.reply(settings_text)
+    
+    elif args[1] == "help":
+        help_text = (
+            f"**📡 Channel Forwarding Help**\n\n"
+            f"**Setup via Environment Variables:**\n"
+            f"`SOURCE_CHANNELS` - Comma-separated list of source channel usernames or IDs\n"
+            f"`DESTINATION_CHANNEL` - Target channel username or ID\n"
+            f"`FORWARD_ENABLED` - Set to 'true' to enable forwarding\n\n"
+            f"**Example:**\n"
+            f"`SOURCE_CHANNELS=@channel1,@channel2,-1001234567890`\n"
+            f"`DESTINATION_CHANNEL=@mychannel`\n"
+            f"`FORWARD_ENABLED=true`\n\n"
+            f"**Note:** The user session must be a member of all source and destination channels."
+        )
+        await message.reply(help_text)
+    
+    else:
+        await message.reply("**Invalid command. Use `/forward help` for available options.**")
 
 if __name__ == "__main__":
     try:
