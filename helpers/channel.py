@@ -89,7 +89,7 @@ class ChannelCloner:
             if not source_info:
                 raise ValueError(f"Cannot access source channel: {source_channel}")
             
-            # Validate target channel access
+            # Validate target channel access - use user client for validation
             target_info = await self.get_channel_info(target_channel)
             if not target_info:
                 raise ValueError(f"Cannot access target channel: {target_channel}")
