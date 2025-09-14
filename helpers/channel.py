@@ -1,7 +1,9 @@
 import os
 import asyncio
+from time import time
 from typing import Optional, Dict, Callable, Union
 from pyrogram import Client
+from pyrogram.types import Message
 from pyrogram.errors import (
     UsernameNotOccupied,
     PeerIdInvalid,
@@ -11,6 +13,8 @@ from pyrogram.errors import (
 )
 from logger import LOGGER
 from helpers.files import MAX_FILE_SIZE_BYTES, PREMIUM_MAX_FILE_SIZE_BYTES
+from pyleaves import Leaves
+from helpers.utils import progressArgs
 
 
 class ChannelCloner:
@@ -93,6 +97,7 @@ class ChannelCloner:
         start_id: Optional[int] = None,
         end_id: Optional[int] = None,
         progress_callback: Optional[Callable] = None,
+        progress_message: Optional[Message] = None,
     ) -> Dict[str, int]:
         """
         Clone messages from source channel to target channel.
@@ -124,7 +129,7 @@ class ChannelCloner:
                 if current_id is None:
                     stats["skipped"] += 1
                     continue
-                ok = await self._copy_single_message(src, dst, current_id)
+                ok = await self._copy_single_message(src, dst, current_id, progress_message)
                 stats["total"] += 1
                 if ok:
                     stats["successful"] += 1
@@ -145,7 +150,7 @@ class ChannelCloner:
         # Clone by ID range
         LOGGER(__name__).info(f"Starting range clone from {src} to {dst}: {start_id}-{end_id}")
         for mid in range(start_id, end_id + 1):
-            ok = await self._copy_single_message(src, dst, mid)
+            ok = await self._copy_single_message(src, dst, mid, progress_message)
             stats["total"] += 1
             if ok:
                 stats["successful"] += 1
@@ -178,7 +183,7 @@ class ChannelCloner:
                     pass
         return channel
 
-    async def _copy_single_message(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int) -> bool:
+    async def _copy_single_message(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int, progress_message: Optional[Message] = None) -> bool:
         """
         Re-upload media to the target to remove 'Forwarded from' header and caption.
         Skips text-only and audio/voice messages.
@@ -217,13 +222,13 @@ class ChannelCloner:
                 return False
             
             # Always download and re-upload WITHOUT caption to remove forwarding name/caption
-            return await self._download_and_reupload(source_channel, target_channel, message_id)
+            return await self._download_and_reupload(source_channel, target_channel, message_id, progress_message)
         except FloodWait as e:
             wait_s = int(getattr(e, "value", 1))
             LOGGER(__name__).warning(f"FloodWait {wait_s}s on {source_channel}/{message_id}, sleeping...")
             await asyncio.sleep(wait_s + 1)
             try:
-                return await self._download_and_reupload(source_channel, target_channel, message_id)
+                return await self._download_and_reupload(source_channel, target_channel, message_id, progress_message)
             except Exception as e2:
                 LOGGER(__name__).error(f"Retry failed for {source_channel}/{message_id}: {e2}")
                 return False
@@ -237,7 +242,7 @@ class ChannelCloner:
             LOGGER(__name__).error(f"Unexpected error copying {source_channel}/{message_id}: {e}")
             return False
 
-    async def _download_and_reupload(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int) -> bool:
+    async def _download_and_reupload(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int, progress_message: Optional[Message] = None) -> bool:
         """
         Download media from source and re-upload to target channel.
         Used when copy/forward is restricted.
@@ -288,29 +293,45 @@ class ChannelCloner:
                     )
                     return False
                 media_path = None
+                start_ts = time()
                 try:
                     # Download the media
-                    media_path = await source_msg.download()
+                    if progress_message:
+                        media_path = await source_msg.download(
+                            progress=Leaves.progress_for_pyrogram,
+                            progress_args=progressArgs("📥 Downloading (Clone)", progress_message, start_ts),
+                        )
+                    else:
+                        media_path = await source_msg.download()
                     if not media_path:
                         LOGGER(__name__).error(f"Failed to download media from {source_channel}/{message_id}")
                         return False
 
                     # Re-upload based on media type WITHOUT any caption or text
                     if source_msg.photo:
-                        await self.user.send_photo(
-                            chat_id=target_channel,
-                            photo=media_path
-                        )
+                        kwargs = {}
+                        if progress_message:
+                            kwargs = {
+                                "progress": Leaves.progress_for_pyrogram,
+                                "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
+                            }
+                        await self.user.send_photo(chat_id=target_channel, photo=media_path, **kwargs)
                     elif source_msg.video:
-                        await self.user.send_video(
-                            chat_id=target_channel,
-                            video=media_path
-                        )
+                        kwargs = {}
+                        if progress_message:
+                            kwargs = {
+                                "progress": Leaves.progress_for_pyrogram,
+                                "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
+                            }
+                        await self.user.send_video(chat_id=target_channel, video=media_path, **kwargs)
                     elif source_msg.document:
-                        await self.user.send_document(
-                            chat_id=target_channel,
-                            document=media_path
-                        )
+                        kwargs = {}
+                        if progress_message:
+                            kwargs = {
+                                "progress": Leaves.progress_for_pyrogram,
+                                "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
+                            }
+                        await self.user.send_document(chat_id=target_channel, document=media_path, **kwargs)
                     elif source_msg.sticker:
                         await self.user.send_sticker(
                             chat_id=target_channel,
@@ -323,10 +344,13 @@ class ChannelCloner:
                         )
                     else:
                         # Generic document fallback WITHOUT caption
-                        await self.user.send_document(
-                            chat_id=target_channel,
-                            document=media_path
-                        )
+                        kwargs = {}
+                        if progress_message:
+                            kwargs = {
+                                "progress": Leaves.progress_for_pyrogram,
+                                "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
+                            }
+                        await self.user.send_document(chat_id=target_channel, document=media_path, **kwargs)
                     
                     LOGGER(__name__).info(f"Successfully re-uploaded media {source_channel}/{message_id} (no text)")
                     return True

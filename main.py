@@ -510,11 +510,12 @@ async def clone_full_channel(bot: Client, message: Message):
                 except:
                     pass  # Ignore edit errors (rate limits, etc.)
         
-        # Start cloning
+        # Start cloning with progress bar message
         stats = await channel_cloner.clone_channel_messages(
-            source_channel, 
+            source_channel,
             target_channel,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            progress_message=status_msg,
         )
         
         # Final report
@@ -624,13 +625,14 @@ async def clone_range_messages(bot: Client, message: Message):
                 except:
                     pass
         
-        # Start range cloning
+        # Start range cloning with progress bar message
         stats = await channel_cloner.clone_channel_messages(
-            source_channel, 
+            source_channel,
             target_channel,
             start_id=start_id,
             end_id=end_id,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            progress_message=status_msg,
         )
         
         # Final report

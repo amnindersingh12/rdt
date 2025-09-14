@@ -756,3 +756,25 @@
 [14-Sep-25 11:49:51 AM - INFO] - <module>() - Line 657: __main__ - Bot Started!
 [14-Sep-25 11:49:56 AM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
 [14-Sep-25 11:49:56 AM - INFO] - <module>() - Line 665: __main__ - Bot Stopped
+[14-Sep-25 11:57:11 AM - INFO] - <module>() - Line 657: __main__ - Bot Started!
+[14-Sep-25 11:58:41 AM - INFO] - clone_channel_messages() - Line 146: helpers.channel - Starting range clone from -1002411829154 to -1002581484854: 1-3813
+[14-Sep-25 11:58:41 AM - INFO] - _copy_single_message() - Line 216: helpers.channel - Skipping message -1002411829154/1 - no media content
+[14-Sep-25 11:58:42 AM - INFO] - _copy_single_message() - Line 216: helpers.channel - Skipping message -1002411829154/2 - no media content
+[14-Sep-25 11:58:54 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/3 (no text)
+[14-Sep-25 11:59:06 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/4 (no text)
+[14-Sep-25 11:59:21 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/5 (no text)
+[14-Sep-25 11:59:34 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/6 (no text)
+[14-Sep-25 11:59:48 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/7 (no text)
+[14-Sep-25 11:59:59 AM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/8 (no text)
+[14-Sep-25 12:00:13 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/9 (no text)
+[14-Sep-25 12:00:25 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/10 (no text)
+[14-Sep-25 12:00:39 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/11 (no text)
+[14-Sep-25 12:00:50 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/12 (no text)
+[14-Sep-25 12:01:03 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/13 (no text)
+[14-Sep-25 12:01:11 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/14 (no text)
+[14-Sep-25 12:01:18 PM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
+[14-Sep-25 12:01:19 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/15 (no text)
+[14-Sep-25 12:01:27 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/16 (no text)
+[14-Sep-25 12:01:40 PM - INFO] - _download_and_reupload() - Line 331: helpers.channel - Successfully re-uploaded media -1002411829154/17 (no text)
+[14-Sep-25 12:02:08 PM - INFO] - <module>() - Line 659: __main__ - Bot Started!
+[14-Sep-25 12:02:21 PM - INFO] - clone_channel_messages() - Line 151: helpers.channel - Starting range clone from -1002411829154 to -1002581484854: 17-3813
