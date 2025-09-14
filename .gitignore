@@ -2,7 +2,7 @@
 *.session*
 *.vscode*
 *.env
-*.log
+*.txt
 *.json
 *.html
 ./*.pyc

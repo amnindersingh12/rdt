@@ -54,6 +54,16 @@ cp config.env.example config.env
 # Edit config.env with your credentials
 ```
 
+### Generate Session String (recommended)
+
+Use the built-in helper to interactively log in and save `SESSION_STRING` to `config.env`:
+
+```bash
+python tools/generate_session.py
+```
+
+This will prompt for your phone/login code (and 2FA if enabled) and write `SESSION_STRING` into `config.env` for the bot to use.
+
 ---
 
 ## ⚙️ Configuration
