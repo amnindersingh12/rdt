@@ -121,9 +121,7 @@ class ChannelCloner:
         # If no explicit range, iterate full history (newest to oldest)
         if start_id is None or end_id is None:
             LOGGER(__name__).info(f"Starting full channel clone from {src} to {dst}")
-            gen = await self.user.get_chat_history(src)
-            if not gen:
-                return stats
+            gen = self.user.get_chat_history(src)
             async for msg in gen:
                 current_id = getattr(msg, "id", None)
                 if current_id is None:
