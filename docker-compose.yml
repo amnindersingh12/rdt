@@ -1,17 +1,15 @@
 services:
   media_bot:
-    # Build the Docker image using the Dockerfile in the current directory
     build:
       context: .
       dockerfile: Dockerfile
-
-    # Set the timezone environment variable inside the container
     environment:
-      - TZ=Asia/Dhaka
-
-    # Always restart the container if it stops or crashes
-    restart: always
-
-    # Mount the current directory on the host to /app inside the container
+      - TZ=Asia/Kolkata
+    restart: unless-stopped
     volumes:
       - .:/app
+      - ./downloads:/app/downloads
+      - ./logs.txt:/app/logs.txt
+    # If you enabled a health dashboard, expose it here (example: 8080)
+    # ports:
+    #   - "8080:8080"

@@ -18,6 +18,7 @@ from helpers.utils import processMediaGroup, progressArgs, send_media
 from helpers.files import get_download_path, fileSizeLimit, get_readable_file_size, get_readable_time, cleanup_download
 from helpers.msg import getChatMsgID, get_file_name, get_parsed_msg
 from helpers.channel import ChannelCloner
+from helpers.forwarding import ForwardingManager
 
 from config import PyroConf
 from logger import LOGGER
@@ -40,6 +41,7 @@ user = Client(
 
 # Initialize channel cloner
 channel_cloner = ChannelCloner(user, bot, delay=1.0)
+forwarding_manager = ForwardingManager(user)
 
 RUNNING_TASKS = set()
 
@@ -54,7 +56,22 @@ def track_task(coro):
 
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
-    welcome_text = "👋 **How You**\n\nReady? Send me a Telegram post link!"
+    welcome_text = (
+        "👋 **Welcome!** I can download posts, clone channels (media-only), and auto-forward from many sources to one target.\n\n"
+        "**Quick Commands**\n"
+        "• `/dl <post_url>` — Download a single post\n"
+        "• `/bdl <start_url> <end_url>` — Batch download a range\n"
+        "• `/clone_channel <source> <target>` — Clone entire channel (media only)\n"
+        "• `/clone_range <source> <target> <start> <end>` — Clone a message range (media only)\n"
+        "• `/forward` — Configure many→one auto-forwarding\n\n"
+        "**Examples**\n"
+        "• `/dl https://t.me/channel/123`\n"
+        "• `/bdl https://t.me/ch/100 https://t.me/ch/120`\n"
+        "• `/clone_channel @source @target`\n"
+        "• `/clone_range -1001234567890 @target 8400 8500`\n"
+        "• `/forward settarget @mytarget` → `/forward addsrc @src1,@src2` → `/forward enable`\n\n"
+        "Send a Telegram post URL any time to download it."
+    )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
 async def handle_download(bot: Client, message: Message, post_url: str):
@@ -103,7 +120,7 @@ async def handle_download(bot: Client, message: Message, post_url: str):
             download_path = get_download_path(message.id, filename)
 
             media_path = await chat_message.download(
-                file_name=download_path,
+                file_name=str(download_path),
                 progress=Leaves.progress_for_pyrogram,
                 progress_args=progressArgs("📥 Downloading Progress", progress_message, start_time),
             )
@@ -289,7 +306,7 @@ async def handle_any_message(bot: Client, message: Message):
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):
-    uptime = get_readable_time(time() - PyroConf.BOT_START_TIME)
+    uptime = get_readable_time(int(time() - PyroConf.BOT_START_TIME))
     total, used, free = shutil.disk_usage(".")
     sent = psutil.net_io_counters().bytes_sent
     recv = psutil.net_io_counters().bytes_recv
@@ -355,90 +372,63 @@ async def forward_message_to_destination(message: Message):
 
 @user.on_message(filters.channel)
 async def handle_channel_message(client: Client, message: Message):
-    """Handle new messages from monitored channels"""
-    if not PyroConf.FORWARD_ENABLED:
-        return
-    
-    # Skip edited messages
+    """Handle new messages from monitored channels (modular manager)."""
     if message.edit_date:
         return
-        
-    source_channels = get_source_channel_ids()
-    if not source_channels:
-        return
-    
-    # Check if message is from one of our monitored channels
-    channel_match = False
-    for source_channel in source_channels:
-        try:
-            # Handle both username and ID formats
-            if source_channel.startswith("@"):
-                source_channel = source_channel[1:]  # Remove @ prefix
-            
-            # Check if the message is from this source channel
-            if (str(message.chat.id) == str(source_channel) or 
-                str(message.chat.username) == str(source_channel) or
-                message.chat.username == source_channel):
-                channel_match = True
-                break
-        except Exception as e:
-            LOGGER(__name__).error(f"Error checking channel {source_channel}: {e}")
-            continue
-    
-    if channel_match:
-        await forward_message_to_destination(message)
+    await forwarding_manager.handle_new_message(message)
 
 @bot.on_message(filters.command("forward") & filters.private)
 async def manage_forwarding(_, message: Message):
     """Command to manage channel forwarding settings"""
-    args = message.text.split()
-    
+    args = message.text.split(maxsplit=2)
+    cfg = forwarding_manager.get_config()
     if len(args) == 1:
-        # Show current settings
-        source_channels = get_source_channel_ids()
-        status = "✅ Enabled" if PyroConf.FORWARD_ENABLED else "❌ Disabled"
-        
-        settings_text = (
-            f"**📡 Channel Forwarding Settings**\n\n"
+        status = "✅ Enabled" if cfg.get("forward_enabled") else "❌ Disabled"
+        srcs = cfg.get("source_channels", [])
+        dest = cfg.get("destination_channel") or "Not configured"
+        await message.reply(
+            "**📡 Forwarding Settings**\n\n"
             f"**Status:** {status}\n"
-            f"**Source Channels:** `{', '.join(source_channels) if source_channels else 'None configured'}`\n"
-            f"**Destination Channel:** `{PyroConf.DESTINATION_CHANNEL if PyroConf.DESTINATION_CHANNEL else 'None configured'}`\n\n"
-            f"**Commands:**\n"
-            f"`/forward status` - Show current settings\n"
-            f"`/forward help` - Show help information"
+            f"**Sources:** `{', '.join(srcs) if srcs else 'None'}`\n"
+            f"**Destination:** `{dest}`\n\n"
+            "**Commands:**\n"
+            "`/forward enable|disable`\n"
+            "`/forward settarget <channel>`\n"
+            "`/forward addsrc <ch1,ch2,...>`\n"
+            "`/forward rmsrc <ch1,ch2,...>`\n"
+            "`/forward clearsrc`\n"
         )
-        await message.reply(settings_text)
         return
-    
-    if args[1] == "status":
-        source_channels = get_source_channel_ids()
-        status = "✅ Enabled" if PyroConf.FORWARD_ENABLED else "❌ Disabled"
-        
-        settings_text = (
-            f"**📡 Forwarding Status**\n\n"
-            f"**Status:** {status}\n"
-            f"**Source Channels:** `{len(source_channels)} configured`\n"
-            f"**Destination:** `{PyroConf.DESTINATION_CHANNEL if PyroConf.DESTINATION_CHANNEL else 'Not configured'}`"
-        )
-        await message.reply(settings_text)
-    
-    elif args[1] == "help":
-        help_text = (
-            f"**📡 Channel Forwarding Help**\n\n"
-            f"**Setup via Environment Variables:**\n"
-            f"`SOURCE_CHANNELS` - Comma-separated list of source channel usernames or IDs\n"
-            f"`DESTINATION_CHANNEL` - Target channel username or ID\n"
-            f"`FORWARD_ENABLED` - Set to 'true' to enable forwarding\n\n"
-            f"**Example:**\n"
-            f"`SOURCE_CHANNELS=@channel1,@channel2,-1001234567890`\n"
-            f"`DESTINATION_CHANNEL=@mychannel`\n"
-            f"`FORWARD_ENABLED=true`\n\n"
-            f"**Note:** The user session must be a member of all source and destination channels."
-        )
-        await message.reply(help_text)
-    
-    else:
-        await message.reply("**Invalid command. Use `/forward help` for available options.**")
+
+    sub = args[1].lower()
+    if sub in ("enable", "disable"):
+        forwarding_manager.enable(sub == "enable")
+        await message.reply(f"Forwarding {'enabled' if sub=='enable' else 'disabled'}.")
+        return
+
+    if sub == "settarget" and len(args) == 3:
+        forwarding_manager.set_target(args[2])
+        await message.reply("Destination set.")
+        return
+
+    if sub == "addsrc" and len(args) == 3:
+        sources = [s.strip() for s in args[2].split(",") if s.strip()]
+        forwarding_manager.add_sources(sources)
+        await message.reply("Sources added.")
+        return
+
+    if sub == "rmsrc" and len(args) == 3:
+        sources = [s.strip() for s in args[2].split(",") if s.strip()]
+        forwarding_manager.remove_sources(sources)
+        await message.reply("Sources removed.")
+        return
+
+    if sub == "clearsrc":
+        forwarding_manager.clear_sources()
+        await message.reply("All sources cleared.")
+        return
+
+    await message.reply("**Invalid command.** Use `/forward` to see options.")
 
 @bot.on_message(filters.command("clone_channel") & filters.private)
 async def clone_full_channel(bot: Client, message: Message):
@@ -665,8 +655,8 @@ async def clone_range_messages(bot: Client, message: Message):
 if __name__ == "__main__":
     try:
         LOGGER(__name__).info("Bot Started!")
-        user.start()
-        bot.run()
+        with user:
+            bot.run()
     except KeyboardInterrupt:
         pass
     except Exception as err:

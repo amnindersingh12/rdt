@@ -1,6 +1,6 @@
 import os
 import asyncio
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, Union
 from pyrogram import Client
 from pyrogram.errors import (
     UsernameNotOccupied,
@@ -10,6 +10,7 @@ from pyrogram.errors import (
     FloodWait,
 )
 from logger import LOGGER
+from helpers.files import MAX_FILE_SIZE_BYTES, PREMIUM_MAX_FILE_SIZE_BYTES
 
 
 class ChannelCloner:
@@ -36,16 +37,23 @@ class ChannelCloner:
             Dict with channel info or None if channel can't be accessed
         """
         # Normalize identifier: allow '@name', 'name', t.me links, or private invite links
-        ident = channel_identifier.strip()
-        
-        # Handle private invite links (like https://t.me/+ABC123...)
-        if ident.startswith("https://t.me/+"):
-            # Keep the full invite link for private groups/channels
-            pass
-        elif ident.startswith("@"):
-            ident = ident[1:]
-        elif ident.startswith("https://t.me/"):
-            ident = ident.rstrip("/").rsplit("/", 1)[-1]
+        ident: Union[str, int] = channel_identifier.strip()
+        if isinstance(ident, str):
+            # Handle private invite links (like https://t.me/+ABC123...)
+            if ident.startswith("https://t.me/+"):
+                # Keep the full invite link for private groups/channels
+                pass
+            elif ident.startswith("@"):
+                ident = ident[1:]
+            elif ident.startswith("https://t.me/"):
+                ident = ident.rstrip("/").rsplit("/", 1)[-1]
+
+            # Convert numeric IDs to int (handles -100... as well)
+            try:
+                if ident.replace("-", "").isdigit():
+                    ident = int(ident)
+            except Exception:
+                pass
             
         try:
             chat = await self.user.get_chat(ident)
@@ -108,25 +116,25 @@ class ChannelCloner:
         # If no explicit range, iterate full history (newest to oldest)
         if start_id is None or end_id is None:
             LOGGER(__name__).info(f"Starting full channel clone from {src} to {dst}")
-            async for msg in self.user.get_chat_history(src):
+            gen = await self.user.get_chat_history(src)
+            if not gen:
+                return stats
+            async for msg in gen:
                 current_id = getattr(msg, "id", None)
                 if current_id is None:
                     stats["skipped"] += 1
                     continue
-                    
                 ok = await self._copy_single_message(src, dst, current_id)
                 stats["total"] += 1
                 if ok:
                     stats["successful"] += 1
                 else:
                     stats["failed"] += 1
-                    
                 if progress_callback:
                     try:
                         await progress_callback(current_id, start_id or current_id, end_id or current_id, stats)
                     except Exception:
                         pass
-                        
                 await asyncio.sleep(self.delay)
             return stats
 
@@ -154,20 +162,26 @@ class ChannelCloner:
 
         return stats
 
-    def _normalize_channel_identifier(self, channel_str: str) -> str:
+    def _normalize_channel_identifier(self, channel_str: str) -> Union[str, int]:
         """Normalize channel identifier by removing prefixes and extracting from URLs."""
-        channel = channel_str.strip()
-        if channel.startswith("@"):
-            channel = channel[1:]
-        elif channel.startswith("https://t.me/"):
-            channel = channel.rstrip("/").rsplit("/", 1)[-1]
+        channel: Union[str, int] = channel_str.strip()
+        if isinstance(channel, str):
+            if channel.startswith("@"):
+                channel = channel[1:]
+            elif channel.startswith("https://t.me/") and not channel.startswith("https://t.me/+"):
+                channel = channel.rstrip("/").rsplit("/", 1)[-1]
+            # Convert numeric IDs
+            if channel.replace("-", "").isdigit():
+                try:
+                    channel = int(channel)
+                except Exception:
+                    pass
         return channel
 
-    async def _copy_single_message(self, source_channel: str, target_channel: str, message_id: int) -> bool:
+    async def _copy_single_message(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int) -> bool:
         """
-        Copy one message to the target to hide 'Forwarded from'.
-        Falls back to download + re-upload for protected channels.
-        Skips text-only messages and audio messages.
+        Re-upload media to the target to remove 'Forwarded from' header and caption.
+        Skips text-only and audio/voice messages.
         """
         try:
             # First check if we should skip this message type
@@ -202,23 +216,14 @@ class ChannelCloner:
                 LOGGER(__name__).info(f"Skipping message {source_channel}/{message_id} - no media content")
                 return False
             
-            await self.user.copy_message(
-                chat_id=target_channel,
-                from_chat_id=source_channel,
-                message_id=message_id,
-            )
-            return True
+            # Always download and re-upload WITHOUT caption to remove forwarding name/caption
+            return await self._download_and_reupload(source_channel, target_channel, message_id)
         except FloodWait as e:
             wait_s = int(getattr(e, "value", 1))
             LOGGER(__name__).warning(f"FloodWait {wait_s}s on {source_channel}/{message_id}, sleeping...")
             await asyncio.sleep(wait_s + 1)
             try:
-                await self.user.copy_message(
-                    chat_id=target_channel,
-                    from_chat_id=source_channel,
-                    message_id=message_id,
-                )
-                return True
+                return await self._download_and_reupload(source_channel, target_channel, message_id)
             except Exception as e2:
                 LOGGER(__name__).error(f"Retry failed for {source_channel}/{message_id}: {e2}")
                 return False
@@ -232,7 +237,7 @@ class ChannelCloner:
             LOGGER(__name__).error(f"Unexpected error copying {source_channel}/{message_id}: {e}")
             return False
 
-    async def _download_and_reupload(self, source_channel: str, target_channel: str, message_id: int) -> bool:
+    async def _download_and_reupload(self, source_channel: Union[str, int], target_channel: Union[str, int], message_id: int) -> bool:
         """
         Download media from source and re-upload to target channel.
         Used when copy/forward is restricted.
@@ -259,6 +264,29 @@ class ChannelCloner:
 
             # Handle media messages - skip audio and voice messages
             if source_msg.media and not source_msg.audio and not source_msg.voice:
+                # Enforce large file limits (2GB regular, 4GB premium)
+                try:
+                    me = await self.user.get_me()
+                    is_premium = bool(getattr(me, "is_premium", False))
+                except Exception:
+                    is_premium = False
+                limit = PREMIUM_MAX_FILE_SIZE_BYTES if is_premium else MAX_FILE_SIZE_BYTES
+
+                size = None
+                if source_msg.document:
+                    size = source_msg.document.file_size
+                elif source_msg.video:
+                    size = source_msg.video.file_size
+                elif source_msg.photo:
+                    size = None  # allow small photos without explicit check
+                elif source_msg.sticker or source_msg.video_note:
+                    size = None
+
+                if size is not None and size > limit:
+                    LOGGER(__name__).warning(
+                        f"Skipping oversized media {source_channel}/{message_id}: {size} bytes (limit {limit})"
+                    )
+                    return False
                 media_path = None
                 try:
                     # Download the media

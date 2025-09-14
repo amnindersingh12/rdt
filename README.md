@@ -113,10 +113,13 @@ FORWARD_ENABLED=true
 - `/clone_channel <source> <target>` - Clone entire channel (photos, videos, documents, stickers only)
 - `/clone_range <source> <target> <start_id> <end_id>` - Clone specific message range
 
-### Channel Forwarding
-- `/forward` - Show current forwarding settings  
-- `/forward status` - Display forwarding configuration
-- `/forward help` - Setup instructions for auto-forwarding
+### Channel Forwarding (Many → One)
+- `/forward` — Show settings and available subcommands
+- `/forward enable|disable` — Toggle auto-forwarding
+- `/forward settarget <channel>` — Set destination (e.g., `@mytarget` or `-100123...`)
+- `/forward addsrc <ch1,ch2,...>` — Add one or more source channels
+- `/forward rmsrc <ch1,ch2,...>` — Remove source channels
+- `/forward clearsrc` — Clear all sources
 
 ### Utility
 - `/stats` - Bot statistics and system information
@@ -133,14 +136,14 @@ FORWARD_ENABLED=true
 # Clone entire channel (media only)
 /clone_channel @sourcechannel @mytarget
 
-# Clone to private group
-/clone_channel cd https://t.me/+ABC123DEF
+# Clone to private group (invite link)
+/clone_channel @source https://t.me/+ABC123DEF
 
 # Clone specific message range  
 /clone_range @source @target 100 200
 
-# Clone from protected channel
-/clone_range cd cds 8400 8500
+# Clone from protected channel (IDs also work)
+/clone_range -1001234567890 @target 8400 8500
 ```
 
 ### Target Types Supported
@@ -206,14 +209,23 @@ https://t.me/channel/456
 
 ---
 
-## 🔄 Automatic Channel Forwarding
+## 🔄 Automatic Channel Forwarding (Many → One)
 
 Set up continuous monitoring of channels with automatic forwarding:
 
-1. **Configure** source and destination channels in `config.env`
-2. **Enable** forwarding with `FORWARD_ENABLED=true`
-3. **Monitor** with `/forward status` command
-4. **Manage** with `/forward help` for detailed setup
+You can use environment variables for a baseline setup or configure everything at runtime with `/forward` commands.
+
+Quick setup with commands:
+
+```
+/forward settarget @mytarget
+/forward addsrc @source1,@source2,-1001234567890
+/forward enable
+```
+
+Notes:
+- The user session must be a member of all sources and have posting rights in the target.
+- You can view and manage current settings any time with `/forward`.
 
 The bot will automatically forward new posts from monitored channels while respecting the media-only filtering rules.
 

@@ -5,13 +5,7 @@ from logging.handlers import RotatingFileHandler
 # Define the log file path
 LOG_FILE = "logs.txt"
 
-# Attempt to remove old log file if it exists, ignoring errors other than file not found
-try:
-    if os.path.exists(LOG_FILE):
-        os.remove(LOG_FILE)
-except Exception as e:
-    # Log this exception temporarily to stderr but do not fail app start
-    print(f"Warning: Failed to remove old log file '{LOG_FILE}': {e}")
+# Do not delete existing log file; keep history across restarts
 
 # Configure the logging system
 logging.basicConfig(
@@ -21,7 +15,7 @@ logging.basicConfig(
     handlers=[
         # File handler with rotation: max size 5MB, keep up to 10 backups,
         # open file in write-plus mode to overwrite on start
-        RotatingFileHandler(LOG_FILE, mode="w+", maxBytes=5_000_000, backupCount=10),
+    RotatingFileHandler(LOG_FILE, mode="a", maxBytes=5_000_000, backupCount=10),
         # Console output handler
         logging.StreamHandler(),
     ],

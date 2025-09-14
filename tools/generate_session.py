@@ -1,4 +1,6 @@
 import os
+import inspect
+import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -63,16 +65,24 @@ def main():
     print("- Enter the login code sent by Telegram")
     print("- (If enabled) Enter your 2FA password\n")
 
+    session_str = ""
     app = Client("gen_session", api_id=api_id_int, api_hash=api_hash)
     try:
-        app.start()
-        session_str = app.export_session_string()
+        with app:
+            res = app.export_session_string()
+            if inspect.iscoroutine(res):
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                session_str = loop.run_until_complete(res) or ""
+            else:
+                session_str = res or ""
         print("\nSession generated successfully!")
-    finally:
-        try:
-            app.stop()
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"Failed to generate session: {e}")
+        return
 
     # Persist to config.env
     update_env_file(CONFIG_PATH, "SESSION_STRING", session_str)

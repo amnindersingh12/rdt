@@ -1,7 +1,6 @@
-Pyrofork
-gunicorn
-TgCrypto
-Pyleaves
+pyrofork
+tgcrypto
+pyleaves
 python-dotenv
 psutil
 pillow
