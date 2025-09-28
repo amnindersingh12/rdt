@@ -197,6 +197,26 @@ https://t.me/channel/456
 - Detailed error logging
 - Graceful handling of missing/deleted messages
 
+### Format Normalization
+All cloned or externally downloaded media is normalized for consistency:
+* Videos converted to MP4 (H.264/AAC) when not already MP4.
+* Images converted to PNG when not already PNG.
+
+If `ffmpeg` is not installed the bot silently falls back to original formats.
+
+Benefits:
+* Predictable extensions in target channels
+* Broad client compatibility
+* Reduced playback/preview issues from exotic containers
+
+Install ffmpeg:
+* Windows: Download static build https://www.gyan.dev/ffmpeg/ (add `bin` to PATH)
+* macOS: `brew install ffmpeg`
+* Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y ffmpeg`
+* Alpine: `apk add --no-cache ffmpeg`
+
+No reconfiguration needed—detection happens automatically at runtime.
+
 ---
 
 ## 🛡️ Security & Privacy
@@ -263,6 +283,79 @@ The bot will automatically forward new posts from monitored channels while respe
 - **Universal Targets**: Supports any chat type - public/private channels, groups, supergroups
 - **Batch Operations**: Efficient handling of large channel cloning with progress tracking
 - **Background Processing**: Long operations run in background with periodic status updates
+
+---
+
+## ☁️ Deploying to Heroku
+
+### 1. Prerequisites
+* Heroku account
+* Heroku CLI installed: https://devcenter.heroku.com/articles/heroku-cli
+
+### 2. Create App
+```bash
+heroku create my-telegram-media-bot
+```
+
+### 3. Buildpacks
+Add (in order):
+```bash
+heroku buildpacks:add --index 1 heroku-community/apt
+heroku buildpacks:add --index 2 heroku/python
+```
+The `Aptfile` ensures `ffmpeg` is installed for media conversion.
+
+### 4. Set Config Vars
+```bash
+heroku config:set \
+	API_ID=your_id \
+	API_HASH=your_hash \
+	BOT_TOKEN=123456:abcdef... \
+	SESSION_STRING=your_session_string \
+	SOURCE_CHANNELS=@ch1,@ch2 \
+	DESTINATION_CHANNEL=@target \
+	FORWARD_ENABLED=false
+```
+
+If you need to rotate secrets later, just run `heroku config:set` again.
+
+### 5. Push Code
+```bash
+git push heroku main
+```
+
+### 6. Dyno Process Type
+`Procfile` already defines:
+```
+worker: python main.py
+```
+Scale the worker dyno:
+```bash
+heroku ps:scale worker=1
+```
+
+### 7. Logs & Monitoring
+```bash
+heroku logs --tail
+```
+You should see "Bot Started!" and (if ffmpeg detected) conversion messages.
+
+### 8. Updating
+```bash
+git pull origin main   # get local updates if forked
+git push heroku main
+```
+
+### 9. Common Heroku Issues
+| Symptom | Fix |
+|---------|-----|
+| App crashes immediately | Check config vars; missing BOT_TOKEN / SESSION_STRING |
+| No audio in videos | Ensure Apt buildpack added and ffmpeg installed (Aptfile) |
+| Memory quota exceeded | Reduce concurrency / dyno type; lower workers count |
+| Slow startup | Use smaller dependency set; ensure no large file operations at boot |
+
+### 10. Optional: Disable Cloning / Forwarding at Boot
+Leave `FORWARD_ENABLED=false` until you confirm stability, then enable via `/forward enable` inside bot.
 
 ---
 

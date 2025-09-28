@@ -4,3 +4,4 @@ pyleaves
 python-dotenv
 psutil
 pillow
+yt-dlp

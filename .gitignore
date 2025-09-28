@@ -6,3 +6,6 @@
 *.json
 *.html
 ./*.pyc
+*.exe
+*.msi
+*.zip

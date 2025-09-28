@@ -14,7 +14,6 @@ from pyrogram.types import (
     InputMediaVideo,
     InputMediaDocument,
     InputMediaAudio,
-    Voice,
 )
 
 from helpers.files import (
@@ -126,11 +125,12 @@ async def get_video_thumbnail(video_file, duration):
     # Grab a thumbnail at midpoint
     thumbnail_time = duration // 2
 
+    threads = os.cpu_count() or 2
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-ss", str(thumbnail_time), "-i", video_file,
         "-vf", "thumbnail", "-q:v", "1", "-frames:v", "1",
-        "-threads", str(os.cpu_count() // 2), output,
+        "-threads", str(max(1, threads // 2)), output,
     ]
 
     try:
@@ -283,7 +283,17 @@ async def processMediaGroup(chat_message, bot, message):
                     msg.caption or "", msg.caption_entities
                 )
 
-                # Create appropriate InputMedia objects based on media type
+                # Enforce format normalization
+                try:
+                    from helpers.convert import ensure_mp4, ensure_png
+                    if msg.video:
+                        media_path = await ensure_mp4(media_path)
+                    elif msg.photo:
+                        media_path = await ensure_png(media_path)
+                except Exception:
+                    pass
+
+                # Create appropriate InputMedia objects based on (possibly converted) media type
                 if msg.photo:
                     valid_media.append(InputMediaPhoto(media=media_path, caption=parsed_caption))
                 elif msg.video:
@@ -322,8 +332,6 @@ async def processMediaGroup(chat_message, bot, message):
                         await bot.send_document(chat_id=message.chat.id, document=media.media, caption=media.caption)
                     elif isinstance(media, InputMediaAudio):
                         await bot.send_audio(chat_id=message.chat.id, audio=media.media, caption=media.caption)
-                    elif isinstance(media, Voice):
-                        await bot.send_voice(chat_id=message.chat.id, voice=media.media, caption=media.caption)
                 except Exception as individual_e:
                     await message.reply(f"Failed to upload individual media: {individual_e}")
 

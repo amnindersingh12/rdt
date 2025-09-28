@@ -19,9 +19,21 @@ from helpers.files import get_download_path, fileSizeLimit, get_readable_file_si
 from helpers.msg import getChatMsgID, get_file_name, get_parsed_msg
 from helpers.channel import ChannelCloner
 from helpers.forwarding import ForwardingManager
+from helpers.external import is_supported_url, extract_supported_url
+from helpers.external_handler import handle_external
 
 from config import PyroConf
 from logger import LOGGER
+
+# Startup environment checks
+def _env_checks():
+    import shutil
+    if not shutil.which("ffmpeg"):
+        LOGGER(__name__).warning("FFMPEG NOT FOUND - External downloads may lose audio or fail to merge streams. Install ffmpeg and restart.")
+    else:
+        LOGGER(__name__).info("ffmpeg detected.")
+
+_env_checks()
 
 # Initialize bot and user clients
 bot = Client(
@@ -63,12 +75,14 @@ async def start(_, message: Message):
         "• `/bdl <start_url> <end_url>` — Batch download a range\n"
         "• `/clone_channel <source> <target>` — Clone entire channel (media only)\n"
         "• `/clone_range <source> <target> <start> <end>` — Clone a message range (media only)\n"
+        "• `/ext <url>` — Download external (YouTube / Instagram / Pinterest)\n"
         "• `/forward` — Configure many→one auto-forwarding\n\n"
         "**Examples**\n"
         "• `/dl https://t.me/channel/123`\n"
         "• `/bdl https://t.me/ch/100 https://t.me/ch/120`\n"
         "• `/clone_channel @source @target`\n"
         "• `/clone_range -1001234567890 @target 8400 8500`\n"
+        "• `/ext https://www.youtube.com/watch?v=xxxx`\n"
         "• `/forward settarget @mytarget` → `/forward addsrc @src1,@src2` → `/forward enable`\n\n"
         "Send a Telegram post URL any time to download it."
     )
@@ -255,11 +269,17 @@ async def download_range(bot: Client, message: Message):
         f"❌ **Failed**    : `{failed}` error(s)"
     )
 
-@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "stats", "logs", "killall", "forward", "clone_channel", "clone_range"]))
+@bot.on_message(filters.private & ~filters.command(["start", "dl", "bdl", "ext", "stats", "logs", "killall", "forward", "clone_channel", "clone_range"]))
 async def handle_any_message(bot: Client, message: Message):
     # Auto-download if user sends plain text link without commands
     if message.text and not message.text.startswith("/"):
         text = message.text.strip()
+
+        # External URL auto-detect (extract first valid URL anywhere in text)
+        ext_url = extract_supported_url(text)
+        if ext_url:
+            await handle_external(bot, message, ext_url)
+            return
         
         # Check if it's a Telegram link
         if "https://t.me/" in text:
@@ -329,6 +349,14 @@ async def stats(_, message: Message):
         f"**➜ DISK:** `{disk_percent}%`"
     )
     await message.reply(stats_text)
+
+@bot.on_message(filters.command("ext") & filters.private)
+async def external_download_cmd(_, message: Message):
+    if len(message.command) < 2:
+        await message.reply("**Usage:** /ext <YouTube|Instagram|Pinterest URL>")
+        return
+    url = message.command[1].strip()
+    await handle_external(bot, message, url)
 
 @bot.on_message(filters.command("logs") & filters.private)
 async def logs(_, message: Message):

@@ -121,8 +121,8 @@ class ChannelCloner:
         # If no explicit range, iterate full history (newest to oldest)
         if start_id is None or end_id is None:
             LOGGER(__name__).info(f"Starting full channel clone from {src} to {dst}")
-            gen = self.user.get_chat_history(src)
-            async for msg in gen:
+            # Use Pyrogram's built-in iterator for history to avoid type issues
+            async for msg in self.user.get_chat_history(src):  # type: ignore
                 current_id = getattr(msg, "id", None)
                 if current_id is None:
                     stats["skipped"] += 1
@@ -306,6 +306,16 @@ class ChannelCloner:
                         return False
 
                     # Re-upload based on media type WITHOUT any caption or text
+                    from helpers.convert import ensure_mp4, ensure_png  # local import
+                    converted_path = media_path  # ensure defined for cleanup
+                    try:
+                        if source_msg.video:
+                            converted_path = await ensure_mp4(media_path)
+                        elif source_msg.photo:
+                            converted_path = await ensure_png(media_path)
+                    except Exception:
+                        converted_path = media_path
+
                     if source_msg.photo:
                         kwargs = {}
                         if progress_message:
@@ -313,7 +323,7 @@ class ChannelCloner:
                                 "progress": Leaves.progress_for_pyrogram,
                                 "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
                             }
-                        await self.user.send_photo(chat_id=target_channel, photo=media_path, **kwargs)
+                        await self.user.send_photo(chat_id=target_channel, photo=converted_path, **kwargs)
                     elif source_msg.video:
                         kwargs = {}
                         if progress_message:
@@ -321,7 +331,7 @@ class ChannelCloner:
                                 "progress": Leaves.progress_for_pyrogram,
                                 "progress_args": progressArgs("📤 Uploading (Clone)", progress_message, start_ts),
                             }
-                        await self.user.send_video(chat_id=target_channel, video=media_path, **kwargs)
+                        await self.user.send_video(chat_id=target_channel, video=converted_path, **kwargs)
                     elif source_msg.document:
                         kwargs = {}
                         if progress_message:
@@ -354,12 +364,17 @@ class ChannelCloner:
                     return True
                     
                 finally:
-                    # Clean up downloaded file
+                    # Clean up downloaded file(s)
                     try:
                         if media_path and os.path.exists(media_path):
                             os.remove(media_path)
                     except Exception as cleanup_error:
                         LOGGER(__name__).warning(f"Failed to cleanup {media_path}: {cleanup_error}")
+                    try:
+                        if 'converted_path' in locals() and converted_path != media_path and os.path.exists(converted_path):
+                            os.remove(converted_path)
+                    except Exception:
+                        pass
             
             # Skip audio, voice, and caption-only messages
             elif source_msg.audio or source_msg.voice:
