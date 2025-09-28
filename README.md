@@ -297,6 +297,41 @@ Log line confirms usage:
 [ext] Using cookies file: cookies/cookies.txt
 ```
 
+### (NEW) Method C: Encrypted Cookies (Safer for Repos / CI)
+Avoid storing raw cookies in plaintext env history or repo. Use built-in encryption helper.
+
+1. Export your raw `cookies.txt` (Netscape format) from browser.
+2. Run locally:
+	```bash
+	python tools/encrypt_cookies.py --input cookies.txt
+	```
+3. Script outputs two lines:
+	```
+	FERNET_KEY=...
+	ENCRYPTED_COOKIES=...
+	```
+4. Add BOTH to environment (Heroku config vars, Docker compose, or `config.env`).
+5. On startup the app decrypts to `cookies/cookies.txt` in-memory filesystem. File is gitignored.
+
+Rotation:
+```bash
+python tools/encrypt_cookies.py --input cookies.txt   # Generates NEW key + ciphertext
+# Replace existing FERNET_KEY + ENCRYPTED_COOKIES
+```
+
+You may also reuse an existing key:
+```bash
+python tools/encrypt_cookies.py --input cookies.txt --reuse-key $FERNET_KEY
+```
+
+Priority Order (cookie resolution):
+1. YTDLP_COOKIES_FILE (explicit path)
+2. Decrypted encrypted cookies (FERNET_KEY + ENCRYPTED_COOKIES)
+3. YTDLP_COOKIES_B64 (base64 inline)
+4. Local `cookies/cookies.txt` (manual upload via /cookies)
+
+If encrypted vars exist but you see a warning: ensure `main.py` isn't modified to bypass early decrypt.
+
 ### 2. Audio Missing?
 Causes & fixes:
 | Symptom | Likely Cause | Fix |
@@ -482,5 +517,58 @@ This project is for educational purposes only. Users are responsible for complyi
 ## 🔗 Repository
 
 GitHub: [https://github.com/amnindersingh12/rdt](https://github.com/amnindersingh12/rdt)
+
+---
+## 🔄 Automatic Cookie Encryption (Zero Manual Step Mode)
+
+If you prefer not to manually run the encryption script, the app can auto-detect a raw cookies file and encrypt it on first startup.
+
+### How It Works
+On launch, if `FERNET_KEY` and `ENCRYPTED_COOKIES` are NOT already set the bot:
+1. Searches for one of (first match wins):
+	- `cookies_raw.txt`
+	- `cookies/cookies_raw.txt`
+	- `cookies/cookies.txt` (only if not already decrypted this run)
+2. Generates a Fernet key
+3. Encrypts the raw cookies and sets in-process env vars
+4. Writes/updates `FERNET_KEY=` and `ENCRYPTED_COOKIES=` lines inside `config.env` (local only)
+5. (Optional) Pushes them to Heroku if auto push is enabled
+ 6. Saves two helper artifact files (gitignored):
+	 * `cookies/encrypted_cookies.b64` — base64 ciphertext (can copy value to ENCRYPTED_COOKIES)
+	 * `cookies/fernet.key` — Fernet key (maps to FERNET_KEY)
+
+### Enable / Disable
+Auto encryption is ON by default. To disable:
+```
+AUTO_ENCRYPT_COOKIES=false
+```
+in your `config.env` or Heroku config vars.
+
+### Heroku Auto Push
+Set the following to have the bot push the generated values to your Heroku app automatically:
+```
+HEROKU_AUTO_SET_CONFIG=true
+HEROKU_APP_NAME=your-heroku-app
+HEROKU_API_KEY=heroku_api_key_with_write_access
+```
+The Heroku Platform API is called once (idempotent after success). If already present, no regeneration occurs.
+
+### Order of Cookie Resolution (after automation)
+1. `YTDLP_COOKIES_FILE` (explicit path)
+2. Decrypted (FERNET_KEY + ENCRYPTED_COOKIES)
+3. `YTDLP_COOKIES_B64`
+4. Uploaded `/cookies` command
+5. (Only at very first run) Raw auto-encryption candidate files
+
+### Rotation in Auto Mode
+- Delete existing `FERNET_KEY` and `ENCRYPTED_COOKIES` from env (or set `FORCE_ROTATE_COOKIES=true` — future enhancement) and restart
+- Bot re-encrypts the raw file again
+- Or manually run: `python tools/encrypt_cookies.py --input cookies.txt` if you want deterministic control
+ - You may also manually copy `cookies/encrypted_cookies.b64` + `cookies/fernet.key` values into Heroku/GitHub secrets.
+
+### Security Notes
+- Raw file is never committed if `.gitignore` left intact
+- After first encryption, you can safely delete `cookies_raw.txt` locally
+- For best hygiene, re-export cookies periodically and force rotation
 
 ---

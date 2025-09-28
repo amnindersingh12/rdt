@@ -5,3 +5,5 @@ python-dotenv
 psutil
 pillow
 yt-dlp
+cryptography
+requests

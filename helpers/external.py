@@ -75,15 +75,20 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
     if not ffmpeg_path:
         LOGGER(__name__).warning("ffmpeg not found in PATH: external downloads may lose audio or stay in original container")
 
-    # Cookies support (optional). Looks for env var or local cookies/cookies.txt
+    # Cookies resolution (priority): explicit env file -> decrypted cookies (FERNET) -> base64 env -> local file
     cookiefile: Optional[str] = None
     env_cookie = os.environ.get("YTDLP_COOKIES_FILE")
     if env_cookie and os.path.isfile(env_cookie):
         cookiefile = env_cookie
     else:
-        default_cookie = Path("cookies") / "cookies.txt"
-        if default_cookie.exists():
-            cookiefile = str(default_cookie)
+        # If decrypted cookie (from encrypted env) has been produced earlier in startup, use it
+        decrypted_cookie = Path("cookies") / "cookies.txt"
+        if decrypted_cookie.exists():
+            cookiefile = str(decrypted_cookie)
+        else:
+            default_cookie = Path("cookies") / "cookies.txt"
+            if default_cookie.exists():  # fallback legacy path (same path though)
+                cookiefile = str(default_cookie)
     # Base64 inline cookies support (YTDLP_COOKIES_B64) to persist across Heroku restarts
     if not cookiefile:
         b64 = os.environ.get("YTDLP_COOKIES_B64")
@@ -97,6 +102,9 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
                 LOGGER(__name__).info("[ext] Decoded base64 cookies into cookies/cookies.txt")
             except Exception as e:
                 LOGGER(__name__).warning(f"[ext] Failed to decode YTDLP_COOKIES_B64: {e}")
+    # If still none, but encrypted vars exist, user likely misordered startup (decrypt didn't run)
+    if not cookiefile and os.environ.get("FERNET_KEY") and os.environ.get("ENCRYPTED_COOKIES"):
+        LOGGER(__name__).warning("[ext] Encrypted cookies vars present but decrypted file missing; ensure main startup ran _decrypt_cookies_if_present early.")
 
     ydl_opts = {
         "outtmpl": out_tpl,

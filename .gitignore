@@ -1,11 +1,51 @@
-*__pycache__*
+# Bytecode / caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Sessions / auth artifacts
 *.session*
-*.vscode*
+*.session-journal
+
+# Editor / tooling
+.vscode/
+.idea/
+
+# Environment & secrets
+config.env
 *.env
-*.txt
-*.json
-*.html
-./*.pyc
-*.exe
-*.msi
+
+# Cookies (encrypted or decrypted) & encryption outputs
+cookies/
+cookies_raw.txt
+
+# Logs & temp
+logs.txt
+*.log
+tmp/
+
+# OS / archives
+*.DS_Store
 *.zip
+*.tar
+*.tar.gz
+*.7z
+*.bak
+
+# Node / frontend (if later added)
+node_modules/
+dist/
+build/
+
+# Allow documentation even if pattern broadens
+!README.md
+!LICENSE
+!*.md
+
+# Generated encryption artifacts (if any future)
+*.key
+
+# Do NOT blanket-ignore all .txt/.json/.html to avoid hiding legitimate repo files.

@@ -58,6 +58,148 @@ def _env_checks():
 
 _env_checks()
 
+def _auto_encrypt_cookies():
+    """Automatically encrypt a local raw cookies source if encryption vars absent.
+
+    Sources checked (first existing wins):
+      1. cookies_raw.txt
+      2. cookies/cookies_raw.txt
+      3. cookies/cookies.txt (only if not already decrypted this run and no FERNET vars present)
+
+    Behavior:
+      - If FERNET_KEY & ENCRYPTED_COOKIES already set -> no action.
+      - Else generate Fernet key, encrypt file, set os.environ entries.
+      - Append (or update) config.env locally if present (simple replace lines).
+      - If HEROKU_AUTO_SET_CONFIG=true and HEROKU_API_KEY & HEROKU_APP_NAME provided, push vars via Heroku Platform API.
+    Safe failures: logs warnings; never raises fatal exceptions.
+    Opt-out: set AUTO_ENCRYPT_COOKIES=false.
+    """
+    if os.environ.get("AUTO_ENCRYPT_COOKIES", "true").lower() in ("false", "0", "no"):  # user disabled
+        return
+    if os.environ.get("FERNET_KEY") and os.environ.get("ENCRYPTED_COOKIES"):
+        return  # already configured
+    # Locate raw file
+    candidates = [
+        "cookies_raw.txt",
+        os.path.join("cookies", "cookies_raw.txt"),
+        os.path.join("cookies", "cookies.txt"),
+    ]
+    raw_path = None
+    for c in candidates:
+        if os.path.isfile(c):
+            raw_path = c
+            break
+    if not raw_path:
+        return
+    try:
+        with open(raw_path, "rb") as fh:
+            raw_bytes = fh.read()
+        if not raw_bytes.strip():
+            return
+        try:
+            from cryptography.fernet import Fernet  # type: ignore
+        except Exception as e:  # pragma: no cover
+            LOGGER(__name__).warning(f"Cannot auto-encrypt cookies: cryptography missing: {e}")
+            return
+        import base64
+        key = Fernet.generate_key()
+        f = Fernet(key)
+        token = f.encrypt(raw_bytes)
+        enc_b64 = base64.b64encode(token).decode()
+        os.environ["FERNET_KEY"] = key.decode()
+        os.environ["ENCRYPTED_COOKIES"] = enc_b64
+        # Persist encrypted artifacts (not required for runtime, but useful for manual deployment copying)
+        try:
+            os.makedirs("cookies", exist_ok=True)
+            with open(os.path.join("cookies", "encrypted_cookies.b64"), "w", encoding="utf-8") as ef:
+                ef.write(enc_b64)
+            with open(os.path.join("cookies", "fernet.key"), "w", encoding="utf-8") as kf:
+                kf.write(key.decode())
+            LOGGER(__name__).info("Wrote cookies/encrypted_cookies.b64 and cookies/fernet.key (both still ignored by git).")
+        except Exception as e:
+            LOGGER(__name__).warning(f"Failed writing encrypted cookie artifacts: {e}")
+        LOGGER(__name__).info(f"Auto-encrypted cookies from {raw_path} -> environment.")
+        # Update local config.env (non-destructive replace / append)
+        if os.path.isfile("config.env"):
+            try:
+                with open("config.env", "r", encoding="utf-8", errors="ignore") as fh:
+                    lines = fh.readlines()
+                def set_line(var, value):
+                    prefix = var + "="
+                    for i,l in enumerate(lines):
+                        if l.startswith(prefix):
+                            lines[i] = f"{prefix}{value}\n"
+                            return
+                    lines.append(f"{prefix}{value}\n")
+                set_line("FERNET_KEY", key.decode())
+                set_line("ENCRYPTED_COOKIES", enc_b64)
+                with open("config.env", "w", encoding="utf-8") as fh:
+                    fh.writelines(lines)
+                LOGGER(__name__).info("config.env updated with auto-encrypted cookie vars.")
+            except Exception as e:
+                LOGGER(__name__).warning(f"Failed to write config.env with cookie vars: {e}")
+        # Optional: push to Heroku
+        if os.environ.get("HEROKU_AUTO_SET_CONFIG", "false").lower() in ("true", "1", "yes"):
+            app = os.environ.get("HEROKU_APP_NAME")
+            api_key = os.environ.get("HEROKU_API_KEY")
+            if app and api_key:
+                try:
+                    import requests  # type: ignore
+                    url = f"https://api.heroku.com/apps/{app}/config-vars"
+                    headers = {
+                        "Accept": "application/vnd.heroku+json; version=3",
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    }
+                    resp = requests.patch(url, headers=headers, json={
+                        "FERNET_KEY": key.decode(),
+                        "ENCRYPTED_COOKIES": enc_b64,
+                    }, timeout=15)
+                    if resp.status_code in (200, 201):
+                        LOGGER(__name__).info("Pushed encrypted cookies vars to Heroku app.")
+                    else:
+                        LOGGER(__name__).warning(f"Heroku config update failed: {resp.status_code} {resp.text[:120]}")
+                except Exception as e:
+                    LOGGER(__name__).warning(f"Could not push vars to Heroku: {e}")
+            else:
+                LOGGER(__name__).warning("HEROKU_AUTO_SET_CONFIG enabled but HEROKU_APP_NAME or HEROKU_API_KEY missing.")
+    except Exception as e:
+        LOGGER(__name__).warning(f"Auto cookie encryption error: {e}")
+
+_auto_encrypt_cookies()
+
+# Decrypt encrypted cookies from environment, if provided
+def _decrypt_cookies_if_present():
+    """If FERNET_KEY and ENCRYPTED_COOKIES are set, decrypt and write cookies/cookies.txt.
+    Supports ciphertext produced by tools/encrypt_cookies.py (base64 of Fernet token, itself base64).
+    Safe no-op if requirements missing or vars absent. Logs warnings instead of raising.
+    """
+    key = os.environ.get("FERNET_KEY")
+    enc = os.environ.get("ENCRYPTED_COOKIES")
+    if not key or not enc:
+        return
+    try:
+        # Lazy import cryptography only if needed
+        from cryptography.fernet import Fernet  # type: ignore
+    except Exception as e:  # pragma: no cover - only triggered if dependency missing
+        LOGGER(__name__).warning(f"cryptography not installed, cannot decrypt cookies: {e}")
+        return
+    try:
+        import base64
+        # ENCRYPTED_COOKIES is base64-wrapped token
+        token = base64.b64decode(enc)
+        f = Fernet(key.encode())
+        decrypted = f.decrypt(token)
+        os.makedirs("cookies", exist_ok=True)
+        dest = os.path.join("cookies", "cookies.txt")
+        with open(dest, "wb") as fh:
+            fh.write(decrypted)
+        LOGGER(__name__).info("Decrypted cookies.txt from environment.")
+    except Exception as e:
+        LOGGER(__name__).error(f"Failed to decrypt cookies: {e}")
+
+_decrypt_cookies_if_present()
+
 # Initialize bot and user clients
 bot = Client(
     "media_bot",
