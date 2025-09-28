@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, Callable, Awaitable, Any, Union, Coroutine
 import time
 import threading
+import json
 
 from logger import LOGGER
 
@@ -73,6 +74,16 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
     if not ffmpeg_path:
         LOGGER(__name__).warning("ffmpeg not found in PATH: external downloads may lose audio or stay in original container")
 
+    # Cookies support (optional). Looks for env var or local cookies/cookies.txt
+    cookiefile: Optional[str] = None
+    env_cookie = os.environ.get("YTDLP_COOKIES_FILE")
+    if env_cookie and os.path.isfile(env_cookie):
+        cookiefile = env_cookie
+    else:
+        default_cookie = Path("cookies") / "cookies.txt"
+        if default_cookie.exists():
+            cookiefile = str(default_cookie)
+
     ydl_opts = {
         "outtmpl": out_tpl,
         "quiet": True,
@@ -81,14 +92,20 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
         "ignoreerrors": True,
         "skip_download": False,
         "nocheckcertificate": True,
-        # Prefer best MP4 video + best audio; fallback to any best; enforce merge to mp4 when possible.
-        "format": "(bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best)[filesize<2G]/best[filesize<2G]/best",
+        # Prefer best MP4 video + best audio first; allow larger size threshold for quality.
+        "format": "(bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo*+bestaudio/bestvideo+bestaudio/best)[filesize<4G]/best",
         "merge_output_format": "mp4",
         # Postprocessors ensure audio is merged/remuxed; if already single file it passes quickly.
         "postprocessors": [
             {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
         ],
         "noplaylist": True,
+        # Try multiple player clients for YouTube to dodge some gating
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"],
+            }
+        },
         # Add a realistic user-agent to improve compatibility (esp. Pinterest)
         "http_headers": {
             "User-Agent": (
@@ -97,6 +114,10 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
             )
         },
     }
+
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
+        LOGGER(__name__).info(f"[ext] Using cookies file: {cookiefile}")
 
     loop = asyncio.get_running_loop()
 
@@ -165,11 +186,11 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
     base_format = ydl_opts["format"]
     fallback_formats = [
         base_format,
-        # Try generic bestvideo* pattern (covers cases without explicit ext filtering)
+        # Alternate ordering with explicit audio before generic best
         "bestvideo*+bestaudio/bestvideo+bestaudio",
-        # Plain best with merged av
+        "bestaudio+bestvideo/best",
+        "best[ext=mp4]/best",
         "best",
-        # Lowest common denominator
         "b",
     ]
 
@@ -180,8 +201,8 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
         attempt += 1
         local_opts = dict(ydl_opts)
         local_opts["format"] = fmt
-        # Only keep postprocessors for first attempt (subsequent may succeed without them)
-        if attempt > 1:
+        # Keep postprocessors while ffmpeg present for first two attempts, then drop to reduce failures
+        if attempt > 2 or not ffmpeg_path:
             local_opts.pop("postprocessors", None)
         try:
             LOGGER(__name__).info(f"[ext] Attempt {attempt} format='{fmt}' for url={url}")
@@ -224,12 +245,66 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
 
     size = file_path.stat().st_size if file_path.exists() else None
 
+    # Probe audio stream presence for video containers
+    audio_missing = False
+    if ffmpeg_path and file_path.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
+        try:
+            probe_cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=index",
+                "-of", "json", str(file_path)
+            ]
+            proc = await asyncio.create_subprocess_exec(*probe_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, _ = await proc.communicate()
+            if out:
+                meta = json.loads(out.decode() or '{}')
+                streams = meta.get("streams") or []
+                if not streams:
+                    audio_missing = True
+        except Exception:
+            pass
+
+    # If audio missing attempt one recovery re-download with broad format
+    if audio_missing and ffmpeg_path:
+        LOGGER(__name__).warning(f"[ext] No audio stream detected; attempting recovery download for {url}")
+        try:
+            tmp_dir2 = Path(tempfile.mkdtemp(prefix="extdl_fix_"))
+            recover_opts = dict(ydl_opts)
+            recover_opts["outtmpl"] = str(tmp_dir2 / "%(title).200s.%(ext)s")
+            recover_opts["format"] = "bestaudio+bestvideo/best"
+            # Keep postprocessors for recovery if ffmpeg exists
+            if not ffmpeg_path:
+                recover_opts.pop("postprocessors", None)
+            info2 = await _run_in_thread(_download, recover_opts)
+            if info2:
+                # Update file target
+                candidates2 = list(tmp_dir2.glob("*"))
+                if candidates2:
+                    file_path2 = candidates2[0]
+                    if file_path2.exists() and file_path2.stat().st_size > 0:
+                        # Replace original
+                        try:
+                            shutil.rmtree(tmp_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        tmp_dir = tmp_dir2
+                        file_path = file_path2
+                        size = file_path.stat().st_size
+                        audio_missing = False  # assume recovered
+                        LOGGER(__name__).info("[ext] Audio recovery succeeded.")
+        except Exception as e:
+            LOGGER(__name__).warning(f"[ext] Audio recovery failed: {e}")
+
     return {
         "path": str(file_path),
         "title": title,
         "ext": ext,
         "filesize": size,
         "tmp_dir": str(tmp_dir),
+        "audio_checked": True,
+        "audio_missing": audio_missing,
+        "used_cookies": bool(cookiefile),
     }
 
 

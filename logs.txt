@@ -994,3 +994,13 @@
 [28-Sep-25 11:23:05 AM - INFO] - download_external_media() - Line 187: helpers.external - [ext] Attempt 1 format='(bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best)[filesize<2G]/best[filesize<2G]/best' for url=https://www.instagram.com/reel/DJoyv9_z1dy/?igsh=MXhtazRvcXh3dGowdw==
 [28-Sep-25 11:25:39 AM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
 [28-Sep-25 11:25:39 AM - INFO] - <module>() - Line 695: __main__ - Bot Stopped
+[28-Sep-25 01:08:43 PM - INFO] - _env_checks() - Line 34: __main__ - ffmpeg detected.
+[28-Sep-25 01:08:43 PM - INFO] - <module>() - Line 687: __main__ - Bot Started!
+[28-Sep-25 01:08:46 PM - INFO] - download_external_media() - Line 187: helpers.external - [ext] Attempt 1 format='(bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best)[filesize<2G]/best[filesize<2G]/best' for url=https://youtu.be/i42cQBxvQvs
+[28-Sep-25 01:13:19 PM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
+[28-Sep-25 01:13:19 PM - INFO] - <module>() - Line 695: __main__ - Bot Stopped
+[28-Sep-25 01:15:33 PM - INFO] - _env_checks() - Line 34: __main__ - ffmpeg detected.
+[28-Sep-25 01:15:33 PM - INFO] - <module>() - Line 706: __main__ - Bot Started!
+[28-Sep-25 01:15:38 PM - INFO] - download_external_media() - Line 208: helpers.external - [ext] Attempt 1 format='(bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo*+bestaudio/bestvideo+bestaudio/best)[filesize<4G]/best' for url=https://youtube.com/shorts/xzlsz-56R24?si=dB7wZ9qKRZ7jW1CB
+[28-Sep-25 01:16:11 PM - INFO] - signal_handler() - Line 76: root - Stop signal received (SIGINT). Exiting...
+[28-Sep-25 01:16:12 PM - INFO] - <module>() - Line 714: __main__ - Bot Stopped

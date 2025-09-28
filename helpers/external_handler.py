@@ -78,6 +78,12 @@ async def handle_external(bot: Client, message: Message, url: str):
     path = result.get("path") or ""
     size = result.get("filesize")
     title = result.get("title")
+    audio_note = ""
+    if result.get("audio_checked"):
+        if result.get("audio_missing"):
+            audio_note = "\n⚠️ Audio stream missing (provide cookies or original may be silent)."
+        elif result.get("used_cookies"):
+            audio_note = "\n✅ Cookies used."
     if size and not await fileSizeLimit(size, status, "upload"):
         await cleanup_external(result)
         return
@@ -94,13 +100,16 @@ async def handle_external(bot: Client, message: Message, url: str):
             if lower.endswith(video_exts):
                 # Force MP4
                 send_path = await ensure_mp4(path)
-                await bot.send_video(chat_id=message.chat.id, video=send_path, caption=f"{title}" if title else "")
+                cap = f"{title or ''}{audio_note}".strip()
+                await bot.send_video(chat_id=message.chat.id, video=send_path, caption=cap)
             elif lower.endswith(image_exts):
                 # Force PNG
                 send_path = await ensure_png(path)
-                await bot.send_photo(chat_id=message.chat.id, photo=send_path, caption=f"{title}" if title else "")
+                cap = f"{title or ''}{audio_note}".strip()
+                await bot.send_photo(chat_id=message.chat.id, photo=send_path, caption=cap)
             else:
-                await bot.send_document(chat_id=message.chat.id, document=send_path, caption=f"{title}" if title else "")
+                cap = f"{title or ''}{audio_note}".strip()
+                await bot.send_document(chat_id=message.chat.id, document=send_path, caption=cap)
         finally:
             # If we created a converted temp file distinct from original, remove it after send
             if send_path != path:

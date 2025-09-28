@@ -88,6 +88,25 @@ async def start(_, message: Message):
     )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
+@bot.on_message(filters.command("cookies") & filters.private)
+async def set_cookies(_, message: Message):
+    """Save a replied cookies.txt (Netscape format) to improve YouTube / Pinterest downloads."""
+    if not message.reply_to_message or not message.reply_to_message.document:
+        await message.reply("Reply to a cookies.txt document with /cookies")
+        return
+    doc = message.reply_to_message.document
+    if not (doc.file_name and "cookie" in doc.file_name.lower()):
+        await message.reply("File name should include 'cookie'.")
+        return
+    os.makedirs("cookies", exist_ok=True)
+    dest = os.path.join("cookies", "cookies.txt")
+    try:
+        await message.reply_to_message.download(dest)
+        # Touch env override not required; external.py auto-detects cookies/cookies.txt
+        await message.reply("✅ Cookies stored. Future external downloads will use them (until dyno restart).")
+    except Exception as e:
+        await message.reply(f"❌ Failed to store cookies: {e}")
+
 async def handle_download(bot: Client, message: Message, post_url: str):
     post_url = post_url.split("?", 1)[0]  # Remove URL query parameters
 
