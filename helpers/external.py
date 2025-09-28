@@ -8,6 +8,7 @@ from typing import Optional, Dict, Callable, Awaitable, Any, Union, Coroutine
 import time
 import threading
 import json
+import base64
 
 from logger import LOGGER
 
@@ -83,6 +84,19 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
         default_cookie = Path("cookies") / "cookies.txt"
         if default_cookie.exists():
             cookiefile = str(default_cookie)
+    # Base64 inline cookies support (YTDLP_COOKIES_B64) to persist across Heroku restarts
+    if not cookiefile:
+        b64 = os.environ.get("YTDLP_COOKIES_B64")
+        if b64:
+            try:
+                decoded = base64.b64decode(b64.encode()).decode(errors="ignore")
+                os.makedirs("cookies", exist_ok=True)
+                target = Path("cookies") / "cookies.txt"
+                target.write_text(decoded, encoding="utf-8", errors="ignore")
+                cookiefile = str(target)
+                LOGGER(__name__).info("[ext] Decoded base64 cookies into cookies/cookies.txt")
+            except Exception as e:
+                LOGGER(__name__).warning(f"[ext] Failed to decode YTDLP_COOKIES_B64: {e}")
 
     ydl_opts = {
         "outtmpl": out_tpl,
@@ -212,7 +226,7 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
                     LOGGER(__name__).info(f"[ext] Fallback attempt {attempt} succeeded with format '{fmt}'.")
                 break
         except Exception as e:
-            err_msg = str(e)
+            err_msg = str(e) or repr(e)
             errors.append(err_msg)
             # Decide whether to continue. If last attempt, return error.
             # Log condensed reason.
@@ -222,8 +236,10 @@ async def download_external_media(url: str, progress_cb: Optional[ProgressCallab
             continue
 
     if not info:
+        if not errors:
+            errors.append("no_exception_text")
         LOGGER(__name__).error(f"All extract attempts failed. Errors: {errors[-3:]}")
-        return {"error": f"extract_failed: {errors[-1] if errors else 'unknown'}"}
+        return {"error": f"extract_failed: {errors[-1]}"}
 
     # If it's a playlist-like structure, get the first entry
     if "entries" in info and info["entries"]:

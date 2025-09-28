@@ -28,10 +28,33 @@ from logger import LOGGER
 # Startup environment checks
 def _env_checks():
     import shutil
-    if not shutil.which("ffmpeg"):
-        LOGGER(__name__).warning("FFMPEG NOT FOUND - External downloads may lose audio or fail to merge streams. Install ffmpeg and restart.")
+    # Direct detection first
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        # Probe common Heroku apt buildpack install locations
+        candidate_dirs = [
+            "/app/.apt/usr/bin",
+            "/usr/bin",
+            "/usr/local/bin",
+        ]
+        found = None
+        for d in candidate_dirs:
+            cand = os.path.join(d, "ffmpeg")
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                found = cand
+                break
+        if found:
+            # Prepend directory to PATH for downstream subprocess calls
+            dir_path = os.path.dirname(found)
+            os.environ["PATH"] = dir_path + os.pathsep + os.environ.get("PATH", "")
+            LOGGER(__name__).info(f"ffmpeg detected at {found} (added to PATH).")
+        else:
+            LOGGER(__name__).warning(
+                "FFMPEG NOT FOUND - External downloads may lose audio or fail to merge streams. "
+                "If on Heroku: ensure Aptfile contains 'ffmpeg' and that the heroku-buildpack-apt buildpack is before python."
+            )
     else:
-        LOGGER(__name__).info("ffmpeg detected.")
+        LOGGER(__name__).info(f"ffmpeg detected at {ff}.")
 
 _env_checks()
 

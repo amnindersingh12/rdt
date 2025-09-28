@@ -219,6 +219,114 @@ No reconfiguration needed—detection happens automatically at runtime.
 
 ---
 
+## ☁️ Heroku Deployment
+
+### Buildpacks Order (Critical)
+Ensure the Apt buildpack precedes the Python buildpack so `ffmpeg` installs before Python dependencies build:
+
+1. heroku-community/apt  
+2. heroku/python  
+
+Check:
+```bash
+heroku buildpacks -a <app>
+```
+Set/Reorder:
+```bash
+heroku buildpacks:clear -a <app>
+heroku buildpacks:add --index 1 heroku-community/apt -a <app>
+heroku buildpacks:add --index 2 heroku/python -a <app>
+```
+
+### Aptfile
+The root `Aptfile` must contain:
+```
+ffmpeg
+```
+Trigger a new build after changes:
+```bash
+git add Aptfile
+git commit -m "Ensure Aptfile for ffmpeg"
+git push heroku main
+```
+
+### Verifying ffmpeg on Dyno
+```bash
+heroku run bash -a <app>
+which ffmpeg
+ffmpeg -version
+```
+If not found, re-check buildpack order and line endings of `Aptfile` (should be LF, not CRLF).
+
+### Runtime Detection
+Startup logs show either:
+```
+ffmpeg detected at /app/.apt/usr/bin/ffmpeg
+```
+or a warning if missing.
+
+---
+
+## 🌐 External Downloads (YouTube / Instagram / Pinterest)
+
+The bot auto-detects supported URLs even without `/ext`. For best results:
+
+### 1. Provide Cookies (Improves gated / age / bot-check content)
+Two methods:
+
+Method A (Upload):
+1. Export browser cookies (Netscape format) using an extension like "Get cookies.txt".
+2. Send the `cookies.txt` file to the bot.
+3. Reply to that file with `/cookies`.
+
+Method B (Persistent via ENV – good for Heroku):
+1. Base64 encode your `cookies.txt` contents:
+	```bash
+	base64 -w0 cookies.txt > cookies.b64   # Linux/macOS
+	# Windows (PowerShell):
+	[Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt')) | Out-File cookies.b64 -NoNewline
+	```
+2. Set config var:
+	```bash
+	heroku config:set YTDLP_COOKIES_B64="<contents of cookies.b64>" -a <app>
+	```
+3. Deploy / restart; the bot decodes into `cookies/cookies.txt` automatically.
+
+Log line confirms usage:
+```
+[ext] Using cookies file: cookies/cookies.txt
+```
+
+### 2. Audio Missing?
+Causes & fixes:
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| MP4 plays silently | ffmpeg missing | Install via Aptfile & rebuild |
+| Repeated "Sign in" error | Cookies not provided / expired | Re-export fresh cookies |
+| Still silent after recovery | Source video truly silent | None (expected) |
+
+The downloader probes for audio; if absent it attempts a recovery download with a broader format.
+
+### 3. Troubleshooting YouTube "Sign in to confirm you’re not a bot"
+| Step | Action |
+|------|--------|
+| 1 | Confirm cookies file present or `YTDLP_COOKIES_B64` set |
+| 2 | Check logs for `[ext] Using cookies file:` line |
+| 3 | Test a non-shorts public video to isolate issue |
+| 4 | Re-export cookies ensuring `__Secure-` and `SAPISID` entries present |
+| 5 | Update yt-dlp (if needed) by bumping version in requirements.txt |
+
+### 4. Supported Domains
+Currently: YouTube, Instagram, Pinterest (pin.it short links). More can be added on request.
+
+### 5. Commands Recap
+| Command | Purpose |
+|---------|---------|
+| `/ext <url>` | Force external download (auto-detect also works) |
+| `/cookies` | Register an uploaded cookies.txt (reply to file) |
+
+---
+
 ## 🛡️ Security & Privacy
 
 - **User Session**: Bot uses your user account to access restricted content
