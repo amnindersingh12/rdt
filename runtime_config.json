@@ -5,5 +5,24 @@
     "2411829154",
     "1002523833295",
     "1002411829154"
+  ],
+  "mirror_enabled": true,
+  "mirror_rules": {
+    "-1002416589505": [
+      "-1003672461179"
+    ]
+  },
+  "replication_enabled": true,
+  "replication_mappings": [
+    {
+      "source": -1002416589505,
+      "target": -1003672461179,
+      "enabled": true
+    },
+    {
+      "source": -1002523833295,
+      "target": -1002581484854,
+      "enabled": true
+    }
   ]
 }

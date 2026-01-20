@@ -16,6 +16,10 @@ def _default_config() -> Dict:
         "forward_enabled": bool(PyroConf.FORWARD_ENABLED),
         "destination_channel": PyroConf.DESTINATION_CHANNEL or "",
         "source_channels": sources,
+        "mirror_enabled": False,
+        "mirror_rules": {},
+        "replication_enabled": False,
+        "replication_mappings": [],
     }
 
 
@@ -30,6 +34,10 @@ def load_config() -> Dict:
                     "forward_enabled": bool(data.get("forward_enabled", cfg["forward_enabled"])),
                     "destination_channel": str(data.get("destination_channel", cfg["destination_channel"] or "")),
                     "source_channels": list(data.get("source_channels", cfg["source_channels"] or [])),
+                    "mirror_enabled": bool(data.get("mirror_enabled", cfg["mirror_enabled"])),
+                    "mirror_rules": dict(data.get("mirror_rules", cfg["mirror_rules"] or {})),
+                    "replication_enabled": bool(data.get("replication_enabled", cfg["replication_enabled"])),
+                    "replication_mappings": list(data.get("replication_mappings", cfg["replication_mappings"] or [])),
                 })
         except Exception:
             pass
@@ -79,5 +87,64 @@ def set_target_channel(target: str) -> Dict:
 def set_forward_enabled(enabled: bool) -> Dict:
     cfg = load_config()
     cfg["forward_enabled"] = bool(enabled)
+    save_config(cfg)
+    return cfg
+
+
+def set_mirror_enabled(enabled: bool) -> Dict:
+    cfg = load_config()
+    cfg["mirror_enabled"] = bool(enabled)
+    save_config(cfg)
+    return cfg
+
+
+def add_mirror_rule(source: str, targets: List[str]) -> Dict:
+    cfg = load_config()
+    rules = cfg.get("mirror_rules")
+    if not isinstance(rules, dict):
+        rules = {}
+    src = source.strip()
+    if not src:
+        return cfg
+    existing = rules.get(src)
+    if not isinstance(existing, list):
+        existing = []
+    for t in targets:
+        tt = str(t).strip()
+        if tt and tt not in existing:
+            existing.append(tt)
+    rules[src] = existing
+    cfg["mirror_rules"] = rules
+    save_config(cfg)
+    return cfg
+
+
+def remove_mirror_rule(source: str, targets: List[str] | None = None) -> Dict:
+    cfg = load_config()
+    rules = cfg.get("mirror_rules")
+    if not isinstance(rules, dict):
+        rules = {}
+    src = source.strip()
+    if not src:
+        return cfg
+    if targets is None:
+        rules.pop(src, None)
+    else:
+        existing = rules.get(src)
+        if isinstance(existing, list):
+            to_remove = {str(t).strip() for t in targets if str(t).strip()}
+            existing = [t for t in existing if t not in to_remove]
+            if existing:
+                rules[src] = existing
+            else:
+                rules.pop(src, None)
+    cfg["mirror_rules"] = rules
+    save_config(cfg)
+    return cfg
+
+
+def clear_mirror_rules() -> Dict:
+    cfg = load_config()
+    cfg["mirror_rules"] = {}
     save_config(cfg)
     return cfg
