@@ -402,7 +402,72 @@ class ReplicationManager:
                 except Exception:
                     pass  # Fall through to copy_message
             
-            # 8. FORWARD (keep as forward) - only for forwarded messages without content
+            # 8. DOCUMENT / PDF / FILE
+            elif getattr(message, "document", None):
+                try:
+                    sent = await self.user.send_document(
+                        chat_id=target_chat,
+                        document=message.document.file_id,
+                        thumb=getattr(message.document, "thumbs", [None])[0] if getattr(message.document, "thumbs", None) else None,
+                        caption=message.caption,
+                        caption_entities=message.caption_entities,
+                        file_name=message.document.file_name,
+                        reply_to_message_id=reply_to_msg_id,
+                    )
+                except Exception as e:
+                    LOGGER(__name__).warning(f"Failed to send document: {e}. Trying copy.")
+                    pass # Fallback
+
+            # 9. PHOTO
+            elif getattr(message, "photo", None):
+                try:
+                    sent = await self.user.send_photo(
+                        chat_id=target_chat,
+                        photo=message.photo.file_id,
+                        caption=message.caption,
+                        caption_entities=message.caption_entities,
+                        reply_to_message_id=reply_to_msg_id,
+                    )
+                except Exception as e:
+                    LOGGER(__name__).warning(f"Failed to send photo: {e}. Trying copy.")
+                    pass
+
+            # 10. VIDEO
+            elif getattr(message, "video", None):
+                try:
+                    sent = await self.user.send_video(
+                        chat_id=target_chat,
+                        video=message.video.file_id,
+                        caption=message.caption,
+                        caption_entities=message.caption_entities,
+                        duration=message.video.duration,
+                        width=message.video.width,
+                        height=message.video.height,
+                        thumb=getattr(message.video, "thumbs", [None])[0] if getattr(message.video, "thumbs", None) else None,
+                        reply_to_message_id=reply_to_msg_id,
+                    )
+                except Exception as e:
+                     LOGGER(__name__).warning(f"Failed to send video: {e}. Trying copy.")
+                     pass
+
+            # 11. AUDIO
+            elif getattr(message, "audio", None):
+                try:
+                    sent = await self.user.send_audio(
+                        chat_id=target_chat,
+                        audio=message.audio.file_id,
+                        caption=message.caption,
+                        caption_entities=message.caption_entities,
+                        duration=message.audio.duration,
+                        performer=message.audio.performer,
+                        title=message.audio.title,
+                        reply_to_message_id=reply_to_msg_id,
+                    )
+                except Exception as e:
+                    LOGGER(__name__).warning(f"Failed to send audio: {e}. Trying copy.")
+                    pass
+
+            # 12. FORWARD (keep as forward) - only for forwarded messages without content
             elif message.forward_date and not message.media and not message.text:
                 try:
                     sent_msgs = await self.user.forward_messages(
@@ -415,7 +480,14 @@ class ReplicationManager:
                 except Exception:
                     pass  # Fall through to copy
             
-            # 9. USE COPY_MESSAGE FOR EVERYTHING ELSE (preserves text, media, captions, etc.)
+            # 13. TEXT / LINK / ENTITIES
+            # Explicitly fall through to copy_message as it handles text formatting and links best.
+            # But we can log if it's purely text.
+            elif message.text or message.caption:
+                 # Just fall through
+                 pass
+            
+            # 14. USE COPY_MESSAGE FOR EVERYTHING ELSE (preserves text, media, captions, etc.)
             if sent is None:
                 try:
                     sent = await self.user.copy_message(
