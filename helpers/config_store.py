@@ -9,13 +9,10 @@ CONFIG_PATH = "runtime_config.json"
 
 
 def _default_config() -> Dict:
-    sources: List[str] = []
-    if PyroConf.SOURCE_CHANNELS:
-        sources = [s.strip() for s in PyroConf.SOURCE_CHANNELS.split(",") if s.strip()]
     return {
-        "forward_enabled": bool(PyroConf.FORWARD_ENABLED),
-        "destination_channel": PyroConf.DESTINATION_CHANNEL or "",
-        "source_channels": sources,
+        "forward_enabled": False,
+        "destination_channel": "",
+        "source_channels": [],
         "mirror_enabled": False,
         "mirror_rules": {},
         "replication_enabled": False,
