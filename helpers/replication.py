@@ -245,7 +245,42 @@ class ReplicationManager:
         except Exception as e:
             LOGGER(__name__).error(f"Failed to resolve chat ID for {identifier}: {e}")
             return None
-    
+    def _rewrite_links(self, text: str, source_chat: int, target_chat: int) -> str:
+        """Rewrite links in text that point to source channel to point to target channel."""
+        if not text:
+            return text
+        
+        # Helper to replace numeric ID links
+        # Link format: https://t.me/c/1234567890/123
+        # Source ID in link is usually without -100 prefix, just the 10-digit number
+        src_id_str = str(source_chat).replace("-100", "").replace("-", "")
+        tgt_id_str = str(target_chat).replace("-100", "").replace("-", "")
+        
+        # Simple string replacement for private channel links
+        # This is a basic heuristic; regex would be more robust but this covers standard clients.
+        if f"/c/{src_id_str}/" in text:
+            # We need to find specific message IDs to map
+            import re
+            # Pattern: t.me/c/1234567890/54321
+            pattern = re.compile(rf"(t\.me/c/{src_id_str}/(\d+))")
+            
+            def replace_match(match):
+                original_url = match.group(1)
+                msg_id = int(match.group(2))
+                # Try to find mapped ID
+                mapped_id = self.store.get_target_msg_id(source_chat, msg_id, target_chat)
+                if mapped_id:
+                    return f"t.me/c/{tgt_id_str}/{mapped_id}"
+                return original_url # Keep original if not cloned yet
+            
+            try:
+                text = pattern.sub(replace_match, text)
+            except Exception:
+                pass
+            
+        # Handle Public Username Links if applicable
+        # (Assuming we might know usernames, but for now mostly ID based)
+        return text
     async def _copy_message(
         self, 
         source_chat: int, 
@@ -258,272 +293,254 @@ class ReplicationManager:
         Returns the target message ID if successful.
         """
         try:
-            # Skip service messages (join, leave, pin, etc.)
+            # Skip service messages
             if message.service:
-                LOGGER(__name__).debug(f"Skipping service message {source_chat}/{message.id}")
                 return None
             
             # Check if already cloned
             if self.store.is_cloned(source_chat, message.id, target_chat):
-                LOGGER(__name__).debug(f"Message {source_chat}/{message.id} already cloned to {target_chat}")
                 return self.store.get_target_msg_id(source_chat, message.id, target_chat)
             
-            # Determine reply_to_message_id for the target
+            # Determine reply_to_message_id
             reply_to_msg_id = None
             if message.reply_to_message_id:
-                # Look up the target message ID for the replied-to message
                 reply_to_msg_id = self.store.get_target_msg_id(
                     source_chat, 
                     message.reply_to_message_id, 
                     target_chat
                 )
             
+            # Prepare Caption/Text with link rewriting
+            caption = message.caption or ""
+            text = message.text or ""
+            
+            if caption:
+                caption = self._rewrite_links(caption, source_chat, target_chat)
+            if text:
+                text = self._rewrite_links(text, source_chat, target_chat)
+                
+            entities = message.caption_entities if message.caption else message.entities
+            
             sent = None
             
-            # Handle different message types
-            
-            # 1. POLL
-            if getattr(message, "poll", None):
-                poll = message.poll
-                question = getattr(poll, "question", None)
-                if question:
-                    poll_option_texts = []
-                    for option in getattr(poll, "options", []):
-                        if isinstance(option, str):
-                            poll_option_texts.append(option)
-                        elif hasattr(option, "text"):
-                            poll_option_texts.append(str(option.text))
-                        else:
-                            poll_option_texts.append(str(option))
-                    
-                    if len(poll_option_texts) >= 2:
-                        poll_kwargs = {
-                            "chat_id": target_chat,
-                            "question": question,
-                            "options": poll_option_texts,
-                            "is_anonymous": getattr(poll, "is_anonymous", True),
-                            "allows_multiple_answers": getattr(poll, "allows_multiple_answers", False),
-                            "type": getattr(poll, "type", "regular"),
-                            "correct_option_id": getattr(poll, "correct_option_id", None),
-                            "explanation": getattr(poll, "explanation", None),
-                            "reply_to_message_id": reply_to_msg_id,
-                        }
-                        try:
-                            sent = await self.user.send_poll(**poll_kwargs)
-                        except AttributeError:
-                            poll_kwargs["options"] = [SimpleNamespace(text=t, entities=[]) for t in poll_option_texts]
-                            sent = await self.user.send_poll(**poll_kwargs)
-            
-            # 2. CONTACT
-            elif getattr(message, "contact", None):
-                sent = await self.user.send_contact(
-                    chat_id=target_chat,
-                    phone_number=message.contact.phone_number,
-                    first_name=message.contact.first_name,
-                    last_name=getattr(message.contact, "last_name", "") or "",
-                    vcard=getattr(message.contact, "vcard", None),
-                    reply_to_message_id=reply_to_msg_id,
-                )
-            
-            # 3. LOCATION
-            elif getattr(message, "location", None) and not getattr(message, "venue", None):
-                sent = await self.user.send_location(
-                    chat_id=target_chat,
-                    latitude=message.location.latitude,
-                    longitude=message.location.longitude,
-                    reply_to_message_id=reply_to_msg_id,
-                )
-            
-            # 4. VENUE
-            elif getattr(message, "venue", None):
-                sent = await self.user.send_venue(
-                    chat_id=target_chat,
-                    latitude=message.venue.location.latitude,
-                    longitude=message.venue.location.longitude,
-                    title=message.venue.title,
-                    address=message.venue.address,
-                    foursquare_id=getattr(message.venue, "foursquare_id", None),
-                    foursquare_type=getattr(message.venue, "foursquare_type", None),
-                    reply_to_message_id=reply_to_msg_id,
-                )
-            
-            # 5. DICE
-            elif getattr(message, "dice", None):
-                sent = await self.user.send_dice(
-                    chat_id=target_chat,
-                    emoji=message.dice.emoji,
-                    reply_to_message_id=reply_to_msg_id,
-                )
-            
-            # 6. MEDIA GROUP - with deduplication
-            elif message.media_group_id:
+            # 1. MEDIA GROUP (Handle strict first)
+            if message.media_group_id:
                 mg_key = f"{source_chat}_{message.media_group_id}_{target_chat}"
-                
-                # Check if we've already processed this media group
                 if mg_key in self._media_group_cache:
-                    LOGGER(__name__).debug(f"Media group already processed: {mg_key}")
                     return None
-                
                 try:
                     msgs = await self.user.get_media_group(source_chat, message.id)
                     if msgs:
-                        # Only process if this is the first message in the group
                         first_msg = min(msgs, key=lambda m: m.id)
                         if message.id == first_msg.id:
                             self._media_group_cache[mg_key] = True
-                            
+                            # IMPORTANT: copy_media_group doesn't easily allow caption rewriting
+                            # We accept we might lose link rewriting here for now to keep media group structure
                             sent_msgs = await self.user.copy_media_group(
                                 chat_id=target_chat,
                                 from_chat_id=source_chat,
                                 message_id=message.id,
                                 reply_to_message_id=reply_to_msg_id,
                             )
-                            # Map all messages in the group
                             if sent_msgs:
                                 for src_m, tgt_m in zip(msgs, sent_msgs):
                                     self.store.set_mapping(source_chat, src_m.id, target_chat, tgt_m.id)
-                                LOGGER(__name__).info(f"Cloned media group ({len(sent_msgs)} items) to {target_chat}")
                                 return sent_msgs[0].id
                         else:
-                            # This is not the first message in the group, skip it
                             return None
-                except Exception as mg_err:
-                    LOGGER(__name__).warning(f"Media group copy failed, trying single: {mg_err}")
-                    # Fall through to try copy_message
-            
-            # 7. STICKER
-            elif getattr(message, "sticker", None):
-                try:
-                    sent = await self.user.send_sticker(
-                        chat_id=target_chat,
-                        sticker=message.sticker.file_id,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
                 except Exception:
-                    pass  # Fall through to copy_message
+                    pass # Fallback to single media
             
-            # 8. DOCUMENT / PDF / FILE
+            # 2. POLL
+            if getattr(message, "poll", None):
+                poll = message.poll
+                if poll.question and len(poll.options) >= 2:
+                    poll_options = []
+                    for opt in poll.options:
+                        text_val = opt.text if hasattr(opt, "text") else str(opt)
+                        poll_options.append(text_val)
+                        
+                    # Fix QuizCorrectAnswersEmpty: Only send correct_option_id if type is QUIZ
+                    correct_id = poll.correct_option_id if poll.type == "quiz" else None
+                    
+                    try:
+                        sent = await self.user.send_poll(
+                            chat_id=target_chat,
+                            question=poll.question,
+                            options=poll_options,
+                            is_anonymous=poll.is_anonymous,
+                            allows_multiple_answers=poll.allows_multiple_answers,
+                            type=poll.type,
+                            correct_option_id=correct_id,
+                            explanation=poll.explanation,
+                            reply_to_message_id=reply_to_msg_id,
+                        )
+                    except Exception:
+                        pass
+
+            # 3. TEXT
+            elif text:
+                 # Check for webpage preview
+                 disable_preview = True
+                 if message.web_page:
+                     disable_preview = False
+                     
+                 sent = await self.user.send_message(
+                     chat_id=target_chat,
+                     text=text,
+                     entities=entities,
+                     disable_web_page_preview=disable_preview,
+                     reply_to_message_id=reply_to_msg_id,
+                 )
+
+            # 4. DOCUMENT
             elif getattr(message, "document", None):
-                try:
-                    sent = await self.user.send_document(
-                        chat_id=target_chat,
-                        document=message.document.file_id,
-                        thumb=getattr(message.document, "thumbs", [None])[0] if getattr(message.document, "thumbs", None) else None,
-                        caption=message.caption,
-                        caption_entities=message.caption_entities,
-                        file_name=message.document.file_name,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
-                except Exception as e:
-                    LOGGER(__name__).warning(f"Failed to send document: {e}. Trying copy.")
-                    pass # Fallback
+                sent = await self.user.send_document(
+                    chat_id=target_chat,
+                    document=message.document.file_id,
+                    thumb=getattr(message.document, "thumbs", [None])[0] if getattr(message.document, "thumbs", None) else None,
+                    caption=caption,
+                    caption_entities=entities,
+                    force_document=True,
+                    reply_to_message_id=reply_to_msg_id
+                )
 
-            # 9. PHOTO
+            # 5. PHOTO
             elif getattr(message, "photo", None):
-                try:
-                    sent = await self.user.send_photo(
-                        chat_id=target_chat,
-                        photo=message.photo.file_id,
-                        caption=message.caption,
-                        caption_entities=message.caption_entities,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
-                except Exception as e:
-                    LOGGER(__name__).warning(f"Failed to send photo: {e}. Trying copy.")
-                    pass
+                sent = await self.user.send_photo(
+                    chat_id=target_chat,
+                    photo=message.photo.file_id,
+                    caption=caption,
+                    caption_entities=entities,
+                    reply_to_message_id=reply_to_msg_id
+                )
 
-            # 10. VIDEO
+            # 6. VIDEO
             elif getattr(message, "video", None):
-                try:
-                    sent = await self.user.send_video(
-                        chat_id=target_chat,
-                        video=message.video.file_id,
-                        caption=message.caption,
-                        caption_entities=message.caption_entities,
-                        duration=message.video.duration,
-                        width=message.video.width,
-                        height=message.video.height,
-                        thumb=getattr(message.video, "thumbs", [None])[0] if getattr(message.video, "thumbs", None) else None,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
-                except Exception as e:
-                     LOGGER(__name__).warning(f"Failed to send video: {e}. Trying copy.")
-                     pass
+                sent = await self.user.send_video(
+                    chat_id=target_chat,
+                    video=message.video.file_id,
+                    caption=caption,
+                    caption_entities=entities,
+                    duration=message.video.duration,
+                    width=message.video.width,
+                    height=message.video.height,
+                    thumb=getattr(message.video, "thumbs", [None])[0] if getattr(message.video, "thumbs", None) else None,
+                    reply_to_message_id=reply_to_msg_id
+                )
 
-            # 11. AUDIO
+            # 7. AUDIO
             elif getattr(message, "audio", None):
-                try:
-                    sent = await self.user.send_audio(
-                        chat_id=target_chat,
-                        audio=message.audio.file_id,
-                        caption=message.caption,
-                        caption_entities=message.caption_entities,
-                        duration=message.audio.duration,
-                        performer=message.audio.performer,
-                        title=message.audio.title,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
-                except Exception as e:
-                    LOGGER(__name__).warning(f"Failed to send audio: {e}. Trying copy.")
-                    pass
+                sent = await self.user.send_audio(
+                    chat_id=target_chat,
+                    audio=message.audio.file_id,
+                    caption=caption,
+                    caption_entities=entities,
+                    duration=message.audio.duration,
+                    performer=message.audio.performer,
+                    title=message.audio.title,
+                    reply_to_message_id=reply_to_msg_id
+                )
 
-            # 12. FORWARD (keep as forward) - only for forwarded messages without content
-            elif message.forward_date and not message.media and not message.text:
-                try:
-                    sent_msgs = await self.user.forward_messages(
-                        chat_id=target_chat,
-                        from_chat_id=source_chat,
-                        message_ids=message.id,
-                    )
-                    if sent_msgs:
-                        sent = sent_msgs[0] if isinstance(sent_msgs, list) else sent_msgs
-                except Exception:
-                    pass  # Fall through to copy
+            # 8. VOICE
+            elif getattr(message, "voice", None):
+                sent = await self.user.send_voice(
+                    chat_id=target_chat,
+                    voice=message.voice.file_id,
+                    caption=caption,
+                    caption_entities=entities,
+                    duration=message.voice.duration,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+            # 9. VIDEO NOTE
+            elif getattr(message, "video_note", None):
+                 sent = await self.user.send_video_note(
+                    chat_id=target_chat,
+                    video_note=message.video_note.file_id,
+                    duration=message.video_note.duration,
+                    length=message.video_note.length,
+                    thumb=getattr(message.video_note, "thumbs", [None])[0] if getattr(message.video_note, "thumbs", None) else None,
+                    reply_to_message_id=reply_to_msg_id
+                 )
+
+            # 10. ANIMATION (GIF)
+            elif getattr(message, "animation", None):
+                sent = await self.user.send_animation(
+                    chat_id=target_chat,
+                    animation=message.animation.file_id,
+                    caption=caption,
+                    caption_entities=entities,
+                    width=message.animation.width,
+                    height=message.animation.height,
+                    duration=message.animation.duration,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+            # 11. STICKER
+            elif getattr(message, "sticker", None):
+                sent = await self.user.send_sticker(
+                    chat_id=target_chat,
+                    sticker=message.sticker.file_id,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+             # 12. CONTACT
+            elif getattr(message, "contact", None):
+                sent = await self.user.send_contact(
+                    chat_id=target_chat,
+                    phone_number=message.contact.phone_number,
+                    first_name=message.contact.first_name,
+                    last_name=message.contact.last_name,
+                    vcard=message.contact.vcard,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+            # 13. LOCATION
+            elif getattr(message, "location", None) and not getattr(message, "venue", None):
+                 sent = await self.user.send_location(
+                    chat_id=target_chat,
+                    latitude=message.location.latitude,
+                    longitude=message.location.longitude,
+                    reply_to_message_id=reply_to_msg_id
+                 )
             
-            # 13. TEXT / LINK / ENTITIES
-            # Explicitly fall through to copy_message as it handles text formatting and links best.
-            # But we can log if it's purely text.
-            elif message.text or message.caption:
-                 # Just fall through
-                 pass
-            
-            # 14. USE COPY_MESSAGE FOR EVERYTHING ELSE (preserves text, media, captions, etc.)
+            # 14. VENUE
+            elif getattr(message, "venue", None):
+                 sent = await self.user.send_venue(
+                    chat_id=target_chat,
+                    latitude=message.venue.location.latitude,
+                    longitude=message.venue.location.longitude,
+                    title=message.venue.title,
+                    address=message.venue.address,
+                    foursquare_id=message.venue.foursquare_id,
+                    foursquare_type=message.venue.foursquare_type,
+                    reply_to_message_id=reply_to_msg_id
+                 )
+
+            # 15. FALLBACK: COPY MESSAGE
             if sent is None:
-                try:
-                    sent = await self.user.copy_message(
-                        chat_id=target_chat,
-                        from_chat_id=source_chat,
-                        message_id=message.id,
-                        reply_to_message_id=reply_to_msg_id,
-                    )
-                except BadRequest as e:
-                    if "MESSAGE_EMPTY" in str(e) or "MEDIA_EMPTY" in str(e):
-                        # Skip empty messages
-                        LOGGER(__name__).debug(f"Skipping empty message {source_chat}/{message.id}")
-                        return None
-                    elif "CHAT_FORWARDS_RESTRICTED" in str(e):
-                        # Protected channel - need to download and re-upload
-                        LOGGER(__name__).debug(f"Protected content, skipping {source_chat}/{message.id}")
-                        return None
-                    raise
+                # Fallback for complex types or unknown
+                sent = await self.user.copy_message(
+                    chat_id=target_chat,
+                    from_chat_id=source_chat,
+                    message_id=message.id,
+                    caption=caption, # Try to apply rewritten caption if supported for the type
+                    reply_to_message_id=reply_to_msg_id
+                )
             
-            # Store the mapping
+            # Record mapping
             if sent:
-                target_msg_id = getattr(sent, "id", None)
-                if target_msg_id:
-                    self.store.set_mapping(source_chat, message.id, target_chat, target_msg_id)
-                    LOGGER(__name__).info(f"Cloned {source_chat}/{message.id} -> {target_chat}/{target_msg_id}")
-                    return target_msg_id
-            
-            return None
-            
+                sent_id = getattr(sent, "id", None)
+                if sent_id:
+                    self.store.set_mapping(source_chat, message.id, target_chat, sent_id)
+                    LOGGER(__name__).info(f"Cloned {source_chat}/{message.id} -> {target_chat}/{sent_id}")
+                    return sent_id
+                    
         except FloodWait as e:
-            wait_time = int(getattr(e, "value", 5))
-            LOGGER(__name__).warning(f"FloodWait: waiting {wait_time}s...")
-            await asyncio.sleep(wait_time + 1)
+            await asyncio.sleep(e.value + 1)
             if retry_count < 3:
                 return await self._copy_message(source_chat, target_chat, message, retry_count + 1)
-            return None
         except Exception as e:
             LOGGER(__name__).error(f"Error copying {source_chat}/{message.id}: {type(e).__name__}: {e}")
             return None
