@@ -251,10 +251,26 @@ class ReplicationManager:
         try:
             LOGGER(__name__).info(f"Bypassing restriction for {source_chat}/{message.id} (downloading...)")
             
-            # Download
-            # Use a unique path to avoid collisions
-            file_name = f"downloads/{source_chat}_{message.id}"
-            path = await self.user.download_media(message, file_name=file_name)
+            # Determine original filename if possible
+            original_file_name = None
+            if getattr(message, "document", None) and message.document.file_name:
+                original_file_name = message.document.file_name
+            elif getattr(message, "video", None) and getattr(message.video, "file_name", None):
+                original_file_name = message.video.file_name
+            elif getattr(message, "audio", None) and getattr(message.audio, "file_name", None):
+                original_file_name = message.audio.file_name
+            
+            # Construct download path
+            # We add ID prefix to avoid collisions but keep suffix for extension detection
+            base_path = f"downloads/{source_chat}_{message.id}"
+            if original_file_name:
+                # Sanitize filename just in case
+                safe_name = "".join(c for c in original_file_name if c.isalnum() or c in "._- ").strip()
+                file_name_arg = f"{base_path}_{safe_name}"
+            else:
+                file_name_arg = base_path
+
+            path = await self.user.download_media(message, file_name=file_name_arg)
             
             if not path:
                 return None
@@ -268,7 +284,16 @@ class ReplicationManager:
             elif getattr(message, "video", None):
                 sent = await self.user.send_video(target_chat, path, caption=caption, caption_entities=entities, duration=message.video.duration, reply_to_message_id=reply_to)
             elif getattr(message, "document", None):
-                sent = await self.user.send_document(target_chat, path, caption=caption, caption_entities=entities, reply_to_message_id=reply_to)
+                # Explicitly pass file_name for documents
+                # If we have an original name, use it. Otherwise rely on the path basename.
+                sent = await self.user.send_document(
+                    target_chat, 
+                    path, 
+                    caption=caption, 
+                    caption_entities=entities, 
+                    reply_to_message_id=reply_to,
+                    file_name=original_file_name or os.path.basename(path)
+                )
             elif getattr(message, "audio", None):
                 sent = await self.user.send_audio(target_chat, path, caption=caption, caption_entities=entities, duration=message.audio.duration, reply_to_message_id=reply_to)
             elif getattr(message, "voice", None):
