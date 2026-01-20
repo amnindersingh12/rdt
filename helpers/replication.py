@@ -241,10 +241,59 @@ class ReplicationManager:
             
             # Try to get chat by username
             chat = await self.user.get_chat(ident)
-            return chat.id
         except Exception as e:
             LOGGER(__name__).error(f"Failed to resolve chat ID for {identifier}: {e}")
             return None
+
+    async def _bypass_restriction(self, source_chat: int, target_chat: int, message: Message, caption: str, reply_to: Optional[int]) -> Optional[int]:
+        """Bypass copyright/forward restrictions by downloading and re-uploading."""
+        path = None
+        try:
+            LOGGER(__name__).info(f"Bypassing restriction for {source_chat}/{message.id} (downloading...)")
+            
+            # Download
+            # Use a unique path to avoid collisions
+            file_name = f"downloads/{source_chat}_{message.id}"
+            path = await self.user.download_media(message, file_name=file_name)
+            
+            if not path:
+                return None
+                
+            sent = None
+            entities = message.caption_entities if message.caption else message.entities
+            
+            # Re-upload based on type
+            if getattr(message, "photo", None):
+                sent = await self.user.send_photo(target_chat, path, caption=caption, caption_entities=entities, reply_to_message_id=reply_to)
+            elif getattr(message, "video", None):
+                sent = await self.user.send_video(target_chat, path, caption=caption, caption_entities=entities, duration=message.video.duration, reply_to_message_id=reply_to)
+            elif getattr(message, "document", None):
+                sent = await self.user.send_document(target_chat, path, caption=caption, caption_entities=entities, reply_to_message_id=reply_to)
+            elif getattr(message, "audio", None):
+                sent = await self.user.send_audio(target_chat, path, caption=caption, caption_entities=entities, duration=message.audio.duration, reply_to_message_id=reply_to)
+            elif getattr(message, "voice", None):
+                sent = await self.user.send_voice(target_chat, path, caption=caption, caption_entities=entities, duration=message.voice.duration, reply_to_message_id=reply_to)
+            elif getattr(message, "video_note", None):
+                sent = await self.user.send_video_note(target_chat, path, reply_to_message_id=reply_to)
+            elif getattr(message, "animation", None):
+                sent = await self.user.send_animation(target_chat, path, caption=caption, caption_entities=entities, reply_to_message_id=reply_to)
+            elif getattr(message, "sticker", None):
+                sent = await self.user.send_sticker(target_chat, path, reply_to_message_id=reply_to)
+            
+            if sent:
+                LOGGER(__name__).info(f"Bypass successful: {source_chat}/{message.id} -> {target_chat}/{sent.id}")
+                return sent.id
+                
+        except Exception as e:
+            LOGGER(__name__).error(f"Bypass failed for {source_chat}/{message.id}: {e}")
+        finally:
+            # Cleanup
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except:
+                    pass
+        return None
     def _rewrite_links(self, text: str, source_chat: int, target_chat: int) -> str:
         """Rewrite links in text that point to source channel to point to target channel."""
         if not text:
@@ -542,6 +591,20 @@ class ReplicationManager:
             if retry_count < 3:
                 return await self._copy_message(source_chat, target_chat, message, retry_count + 1)
         except Exception as e:
+            # Check for restriction errors
+            err_str = str(e).upper()
+            if "CHAT_FORWARDS_RESTRICTED" in err_str or "FILEREF" in err_str or "MEDIA_CAPTION_TOO_LONG" in err_str or "WEBPAGE_CURL_FAILED" in err_str:
+                LOGGER(__name__).warning(f"Restriction detected ({e}), attempting bypass logic...")
+                # Prepare caption with link rewriting (already done above but strictly pass it)
+                bypass_caption = caption 
+                
+                # Check for protected content flag or simply try bypass
+                bypass_res = await self._bypass_restriction(source_chat, target_chat, message, bypass_caption, reply_to_msg_id)
+                if bypass_res:
+                    # Store mapping since we manually sent it
+                    self.store.set_mapping(source_chat, message.id, target_chat, bypass_res)
+                    return bypass_res
+            
             LOGGER(__name__).error(f"Error copying {source_chat}/{message.id}: {type(e).__name__}: {e}")
             return None
     
