@@ -52,6 +52,8 @@ pip install -r requirements.txt
 # Setup configuration
 cp config.env.example config.env
 # Edit config.env with your credentials
+# Optional: seed forwarding/mirroring rules (otherwise the bot starts with them off)
+cp runtime_config.example.json runtime_config.json
 ```
 
 ### Generate Session String (recommended)

@@ -49,3 +49,8 @@ build/
 *.key
 
 # Do NOT blanket-ignore all .txt/.json/.html to avoid hiding legitimate repo files.
+# Local runtime state (never commit)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+runtime_config.json
