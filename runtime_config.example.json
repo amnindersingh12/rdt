@@ -1,0 +1,9 @@
+{
+  "forward_enabled": false,
+  "destination_channel": "",
+  "source_channels": [],
+  "mirror_enabled": false,
+  "mirror_rules": {},
+  "replication_enabled": false,
+  "replication_mappings": []
+}
