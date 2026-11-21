@@ -1,5 +1,5 @@
 # Use official slim Python 3.11 image as base
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 # Update package lists and upgrade existing packages;
 # Install essential build tools and timezone data;
